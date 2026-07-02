@@ -68,12 +68,17 @@ def plot_series_with_anomalies(
 
     flags = anomalies[anomalies["series"] == series]
     present_types = set(flags["flag_type"].unique())
-    flagged_hours = sorted(set(pd.to_datetime(flags["timestamp"]).dt.hour.unique()))
 
-    # one distinct color per flagged hour — offset +5 to avoid blue/orange/green/red/purple
-    # which are already used as series line colors
+    critical_flags = flags[flags["flag_type"].isin(["drop_zscore", "contextual_zero"])]
+    holiday_flags  = flags[flags["flag_type"] == "contextual_zero_holiday"]
+
+    critical_hours = sorted(set(pd.to_datetime(critical_flags["timestamp"]).dt.hour.unique()))
+    holiday_hours  = sorted(set(pd.to_datetime(holiday_flags["timestamp"]).dt.hour.unique()))
+    flagged_hours  = critical_hours  # bottom panel lines = critical only
+
+    # one distinct color per critical hour — offset +5 to avoid series line colors
     _cmap = matplotlib.colormaps["tab10"]
-    hour_colors = {h: _cmap((i + 5) % 10) for i, h in enumerate(flagged_hours)}
+    hour_colors = {h: _cmap((i + 5) % 10) for i, h in enumerate(critical_hours)}
 
     with plt.rc_context(STYLE):
         fig, (ax_ts, ax_hr) = plt.subplots(
@@ -94,14 +99,14 @@ def plot_series_with_anomalies(
         ax_ts.plot(df.index, df[series].values, linewidth=1.8,
                    color=color, alpha=0.9, label="Observed hit rate")
 
-        # flag markers: o hollow (hour-colored) = anomaly; x black = holiday zero
+        # o hollow (hour-colored) = critical anomaly; x black = holiday zero (no color)
         for _, flag in flags.iterrows():
-            hour = pd.Timestamp(flag["timestamp"]).hour
-            hc = hour_colors[hour]
             if flag["flag_type"] == "contextual_zero_holiday":
                 ax_ts.scatter(flag["timestamp"], flag["observed"],
                               color="black", marker="x", s=60, zorder=6, linewidths=2.0)
             else:
+                hour = pd.Timestamp(flag["timestamp"]).hour
+                hc = hour_colors[hour]
                 ax_ts.scatter(flag["timestamp"], flag["observed"],
                               facecolors="none", edgecolors=hc,
                               marker="o", s=60, zorder=6, linewidths=1.8)
