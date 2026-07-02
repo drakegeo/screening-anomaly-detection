@@ -99,17 +99,18 @@ def plot_series_with_anomalies(
         ax_ts.plot(df.index, df[series].values, linewidth=1.8,
                    color=color, alpha=0.9, label="Observed hit rate")
 
-        # o hollow (hour-colored) = critical anomaly; x black = holiday zero (no color)
-        for _, flag in flags.iterrows():
-            if flag["flag_type"] == "contextual_zero_holiday":
-                ax_ts.scatter(flag["timestamp"], flag["observed"],
-                              color="black", marker="x", s=60, zorder=6, linewidths=2.0)
-            else:
-                hour = pd.Timestamp(flag["timestamp"]).hour
-                hc = hour_colors[hour]
-                ax_ts.scatter(flag["timestamp"], flag["observed"],
-                              facecolors="none", edgecolors=hc,
-                              marker="o", s=60, zorder=6, linewidths=1.8)
+        # pass 1: x black (holiday zeros, smaller) — drawn first so o sits on top
+        for _, flag in flags[flags["flag_type"] == "contextual_zero_holiday"].iterrows():
+            ax_ts.scatter(flag["timestamp"], flag["observed"],
+                          color="black", marker="x", s=30, zorder=5, linewidths=1.5)
+
+        # pass 2: o hollow (critical anomalies, hour-colored) — drawn on top
+        for _, flag in flags[flags["flag_type"] != "contextual_zero_holiday"].iterrows():
+            hour = pd.Timestamp(flag["timestamp"]).hour
+            hc = hour_colors[hour]
+            ax_ts.scatter(flag["timestamp"], flag["observed"],
+                          facecolors="none", edgecolors=hc,
+                          marker="o", s=60, zorder=6, linewidths=1.8)
 
         _draw_background(ax_ts, df)
 
