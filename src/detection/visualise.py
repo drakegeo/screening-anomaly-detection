@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import matplotlib
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -21,13 +22,18 @@ FLAG_STYLES = {
 
 
 def _add_legend(ax: plt.Axes, present_types: set[str]) -> None:
+    """Fixed two-entry legend shown on every plot for consistency."""
+    from matplotlib.lines import Line2D
     handles = [
-        mpatches.Patch(color=v["color"], label=v["label"])
-        for k, v in FLAG_STYLES.items()
-        if k in present_types
+        Line2D([0], [0], marker="o", color="w",
+               markerfacecolor="none", markeredgecolor="#555555",
+               markeredgewidth=1.5, markersize=7, linestyle="none",
+               label="Anomaly flag (drop or zero during active hour)"),
+        Line2D([0], [0], marker="x", color="black",
+               markersize=7, markeredgewidth=2.0, linestyle="none",
+               label="Holiday zero — likely volume effect, not list failure"),
     ]
-    if handles:
-        ax.legend(handles=handles, fontsize=8, loc="upper right")
+    ax.legend(handles=handles, fontsize=8, loc="upper right")
 
 
 def _draw_background(ax: plt.Axes, df: pd.DataFrame) -> None:
@@ -49,61 +55,110 @@ def plot_series_with_anomalies(
     baseline: dict[str, pd.DataFrame],
     anomalies: pd.DataFrame,
 ) -> None:
-    """Individual series plot: baseline band + flag markers by type."""
+    """Two-panel plot per series.
+
+    Top: time series with flag markers labelled by hour-of-day.
+    Bottom: 24h diurnal baseline profile with flagged hours highlighted.
+    """
     color = _list_color(series)
-    hours = df["hour_of_day"].values
-    exp_med = baseline["median"].loc[hours, series].values
-    exp_mad = baseline["mad"].loc[hours, series].values
+    hours_arr = df["hour_of_day"].values
+    exp_med = baseline["median"].loc[hours_arr, series].values
+    exp_mad = baseline["mad"].loc[hours_arr, series].values
     lower = np.maximum(exp_med - BAND_MULTIPLIER * exp_mad, 0)
 
     flags = anomalies[anomalies["series"] == series]
     present_types = set(flags["flag_type"].unique())
+    flagged_hours = sorted(set(pd.to_datetime(flags["timestamp"]).dt.hour.unique()))
+
+    # one distinct color per flagged hour — offset +5 to avoid blue/orange/green/red/purple
+    # which are already used as series line colors
+    _cmap = matplotlib.colormaps["tab10"]
+    hour_colors = {h: _cmap((i + 5) % 10) for i, h in enumerate(flagged_hours)}
 
     with plt.rc_context(STYLE):
-        fig, ax = plt.subplots(figsize=(14, 5))
+        fig, (ax_ts, ax_hr) = plt.subplots(
+            2, 1, figsize=(22, 7),
+            gridspec_kw={"height_ratios": [3, 1], "hspace": 0.35},
+        )
 
-        ax.fill_between(df.index, lower, exp_med, alpha=0.15, color=color,
-                        label=f"Expected band (median ± {BAND_MULTIPLIER} MAD)")
-        ax.plot(df.index, exp_med, color=color, linewidth=1.0,
-                linestyle="--", alpha=0.5, label="Hourly median baseline")
-        ax.plot(df.index, df[series].values, linewidth=0.9,
-                color=color, alpha=0.9, label="Observed hit rate")
+        # ── TOP: time series ──────────────────────────────────────────────────
+        # red zone = alarm (below threshold); grey zone = expected range
+        ax_ts.fill_between(df.index, 0, lower,
+                           alpha=0.12, color="#c0392b", label="Alarm zone (below threshold)")
+        ax_ts.fill_between(df.index, lower, exp_med,
+                           alpha=0.15, color="#95a5a6", label="Expected range (median ± 2.5 MAD)")
+        ax_ts.plot(df.index, exp_med, color="#7f8c8d", linewidth=0.8,
+                   alpha=0.7, label="Hourly median baseline")
+        ax_ts.plot(df.index, lower, color="#c0392b", linewidth=0.6,
+                   linestyle=":", alpha=0.5)
+        ax_ts.plot(df.index, df[series].values, linewidth=1.8,
+                   color=color, alpha=0.9, label="Observed hit rate")
 
-        for ftype, style in FLAG_STYLES.items():
-            subset = flags[flags["flag_type"] == ftype]
-            if not subset.empty:
-                ax.scatter(
-                    subset["timestamp"], subset["observed"],
-                    color=style["color"], marker=style["marker"],
-                    s=style["s"], zorder=5,
-                )
+        # flag markers: o hollow (hour-colored) = anomaly; x black = holiday zero
+        for _, flag in flags.iterrows():
+            hour = pd.Timestamp(flag["timestamp"]).hour
+            hc = hour_colors[hour]
+            if flag["flag_type"] == "contextual_zero_holiday":
+                ax_ts.scatter(flag["timestamp"], flag["observed"],
+                              color="black", marker="x", s=60, zorder=6, linewidths=2.0)
+            else:
+                ax_ts.scatter(flag["timestamp"], flag["observed"],
+                              facecolors="none", edgecolors=hc,
+                              marker="o", s=60, zorder=6, linewidths=1.8)
 
-        # worst z-score annotation
-        zscore_flags = flags[flags["flag_type"] == "drop_zscore"]
-        if not zscore_flags.empty:
-            worst_idx = zscore_flags["z_score"].idxmin()
-            worst = zscore_flags.loc[worst_idx]
-            ax.annotate(
-                f"Worst: z={worst['z_score']:.2f}\n{pd.Timestamp(worst['timestamp']).strftime('%b %d %H:%M')}",
-                xy=(worst["timestamp"], worst["observed"]),
-                xytext=(15, 20), textcoords="offset points",
-                fontsize=8, color="#c0392b",
-                arrowprops=dict(arrowstyle="->", color="#c0392b", lw=0.8),
-            )
-
-        _draw_background(ax, df)
+        _draw_background(ax_ts, df)
 
         n_critical = len(flags[flags["flag_type"].isin(["drop_zscore", "contextual_zero"])])
-        n_holiday = len(flags[flags["flag_type"] == "contextual_zero_holiday"])
-        subtitle = f"{n_critical} critical flag(s)  |  {n_holiday} holiday zero(s)"
-        ax.set_title(f"{series} — Drop Anomaly Detection  |  {subtitle}",
-                     fontsize=12, fontweight="bold", color=color)
-        ax.set_xlabel("Date (UTC)", fontsize=10)
-        ax.set_ylabel("Hit rate", fontsize=10)
-        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+        n_holiday  = len(flags[flags["flag_type"] == "contextual_zero_holiday"])
+        ax_ts.set_title(
+            f"{series}  |  {n_critical} critical flag(s)  +  {n_holiday} holiday zero(s)\n"
+            f"Marker colour = hour of day — trace each colour to the diurnal profile below",
+            fontsize=11, fontweight="bold", color="black",
+        )
+        ax_ts.set_xlabel("Date (UTC)", fontsize=9)
+        ax_ts.set_ylabel("Hit rate", fontsize=9)
+        # small negative lower bound so y=0 markers sit above the axis spine
+        _ymax = ax_ts.get_ylim()[1]
+        ax_ts.set_ylim(bottom=-_ymax * 0.03)
+        ax_ts.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+        _add_legend(ax_ts, present_types)
 
-        _add_legend(ax, present_types)
-        fig.tight_layout()
+        # ── BOTTOM: 24h diurnal baseline profile ──────────────────────────────
+        hour_range = np.arange(24)
+        med_profile = baseline["median"][series].values
+        mad_profile = baseline["mad"][series].values
+        lo_profile  = np.maximum(med_profile - BAND_MULTIPLIER * mad_profile, 0)
+
+        # red = alarm zone (below threshold), grey = expected range
+        ax_hr.fill_between(hour_range, 0, lo_profile,
+                           alpha=0.18, color="#c0392b", label="Alarm zone")
+        ax_hr.fill_between(hour_range, lo_profile, med_profile,
+                           alpha=0.20, color="#95a5a6", label="Expected range")
+        ax_hr.plot(hour_range, med_profile, color="#2c5f8a",
+                   linewidth=1.5, label="Median baseline")
+        ax_hr.plot(hour_range, lo_profile, color="#c0392b",
+                   linewidth=1.2, linestyle="--", label="Alarm threshold")
+
+        # flagged hours: vertical lines colored per hour (matches top-panel markers)
+        for h in flagged_hours:
+            hc = hour_colors[h]
+            ax_hr.axvline(h, color=hc, linewidth=1.8, alpha=0.9, zorder=5)
+            ax_hr.text(h + 0.2, med_profile.max() * 0.85,
+                       f"{h:02d}h", fontsize=7, color=hc, fontweight="bold")
+
+        ax_hr.set_xlim(-0.8, 23.8)
+        ax_hr.set_xticks(range(0, 24, 2))
+        ax_hr.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)], fontsize=7)
+        ax_hr.set_xlabel("Hour of day (UTC)", fontsize=8)
+        ax_hr.set_ylabel("Hit rate", fontsize=8)
+        ax_hr.set_title(
+            "24h Baseline Profile — grey = expected range, red = alarm zone, "
+            "vertical lines = hours where flag triggered",
+            fontsize=8, color="#555555",
+        )
+        ax_hr.legend(fontsize=7, loc="upper right")
+        ax_hr.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+
         _save(fig, f"anomaly_{series.lower()}")
 
 
