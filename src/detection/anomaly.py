@@ -140,6 +140,61 @@ def anomaly_summary(anomalies: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values("worst_z")
 
 
+def group_into_events(
+    anomalies: pd.DataFrame,
+    max_gap_hours: int = 2,
+) -> pd.DataFrame:
+    """Collapse consecutive-hour flags of the same series into single events.
+
+    A 6-hour sustained drop is ONE operational event, not six independent alerts.
+    Counting hour-level flags overstates severity and inflates alert volume. This
+    groups flags of the same series that are within ``max_gap_hours`` of each other
+    into a single event, so the results reflect what an analyst actually responds to.
+
+    ``max_gap_hours=2`` tolerates a one-hour recovery blip inside a sustained drop.
+
+    Returns one row per event:
+        series, flag_type, start, end, duration_hours, n_flags,
+        worst_z, worst_observed, expected_median, is_holiday
+    """
+    if anomalies.empty:
+        return pd.DataFrame(columns=[
+            "series", "flag_type", "start", "end", "duration_hours",
+            "n_flags", "worst_z", "worst_observed", "expected_median", "is_holiday",
+        ])
+
+    a = anomalies.copy()
+    a["timestamp"] = pd.to_datetime(a["timestamp"])
+    a = a.sort_values(["series", "timestamp"])
+
+    events = []
+    for series, grp in a.groupby("series"):
+        grp = grp.sort_values("timestamp")
+        # new event when gap from previous flag exceeds max_gap_hours
+        gap = grp["timestamp"].diff().dt.total_seconds().div(3600)
+        event_id = (gap > max_gap_hours).fillna(True).cumsum()
+
+        for _, ev in grp.groupby(event_id):
+            z_vals = ev["z_score"].dropna()
+            events.append({
+                "series": series,
+                "flag_type": ev["flag_type"].mode().iloc[0],
+                "start": ev["timestamp"].min(),
+                "end": ev["timestamp"].max(),
+                "duration_hours": int(
+                    (ev["timestamp"].max() - ev["timestamp"].min()).total_seconds() / 3600
+                ) + 1,
+                "n_flags": len(ev),
+                "worst_z": round(z_vals.min(), 3) if not z_vals.empty else np.nan,
+                "worst_observed": round(ev["observed"].min(), 6),
+                "expected_median": round(ev["expected_median"].max(), 6),
+                "is_holiday": bool(ev["is_holiday"].any()),
+            })
+
+    out = pd.DataFrame(events).sort_values(["worst_z", "start"]).reset_index(drop=True)
+    return out
+
+
 def threshold_sensitivity(
     df: pd.DataFrame,
     series_cols: list[str],

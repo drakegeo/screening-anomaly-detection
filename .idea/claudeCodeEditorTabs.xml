@@ -1,23 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ClaudeCodeEditorTabs">
-    <option name="activeSessionId" value="1bc8eadf-4423-4959-8eda-f2bef985a5e2" />
+    <option name="activeSessionId" value="694b1329-e245-4991-a18a-85ac06a07d0d" />
     <option name="openSessionIds">
       <list>
-        <option value="3d70c579-5a31-42db-ab05-3095fb9feddb" />
-        <option value="1bc8eadf-4423-4959-8eda-f2bef985a5e2" />
+        <option value="694b1329-e245-4991-a18a-85ac06a07d0d" />
       </list>
     </option>
     <option name="sessionPaths">
       <map>
-        <entry key="1bc8eadf-4423-4959-8eda-f2bef985a5e2" value="/sessions/2b03d659-c026-4e67-829d-e03e452c8be7" />
-        <entry key="3d70c579-5a31-42db-ab05-3095fb9feddb" value="/sessions/2b03d659-c026-4e67-829d-e03e452c8be7" />
+        <entry key="694b1329-e245-4991-a18a-85ac06a07d0d" value="/sessions/2b03d659-c026-4e67-829d-e03e452c8be7" />
       </map>
     </option>
     <option name="sessionTitles">
       <map>
-        <entry key="1bc8eadf-4423-4959-8eda-f2bef985a5e2" value="/caveman:caveman" />
         <entry key="3d70c579-5a31-42db-ab05-3095fb9feddb" value="/caveman:caveman" />
+        <entry key="694b1329-e245-4991-a18a-85ac06a07d0d" value="/caveman:caveman" />
       </map>
     </option>
   </component>

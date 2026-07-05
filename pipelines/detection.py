@@ -1,15 +1,30 @@
-"""Detection pipeline: baseline fitting, anomaly scoring, visualisations.
+"""Detection pipeline: baseline fitting, anomaly scoring, PCA check, visualisations.
 
-Run: python main_detection.py
-Depends on: main_processing.py having been run first (data must be loadable).
+Run: python -m pipelines.detection
 """
 
 from pathlib import Path
 
 from src.processing.load import load_data, get_series_cols
 from src.detection.baseline import fit_baseline, save_baseline
-from src.detection.anomaly import score_anomalies, anomaly_summary, threshold_sensitivity
-from src.detection.visualise import plot_series_with_anomalies, plot_anomaly_overview, plot_threshold_sensitivity
+from src.detection.anomaly import (
+    score_anomalies, anomaly_summary, threshold_sensitivity, group_into_events,
+)
+from src.detection.validation import false_positive_rate
+from src.detection.diagnostics import (
+    day_of_week_check, alert_confidence_audit, baseline_confidence_summary,
+)
+from src.detection.pca import pca_reconstruction_flags, consensus_with_zscore, save_pca_scores
+from src.detection.isoforest import (
+    fit_isolation_forest, shap_reason_codes,
+    consensus_with_zscore as iso_consensus, save_scores as save_iso_scores,
+)
+from src.detection.visualise import (
+    plot_series_with_anomalies, plot_anomaly_overview,
+    plot_threshold_sensitivity, plot_corroboration_grid, plot_pca_detection,
+    plot_isoforest_scores, plot_shap_importance, plot_shap_reasons,
+    plot_monitoring_dashboard,
+)
 
 OUTPUTS = Path("outputs")
 
@@ -45,10 +60,63 @@ def main() -> None:
     print("\nAnomaly summary:")
     print(anomaly_summary(anomalies).to_string())
 
+    print("\nGrouping hour-level flags into operational events...")
+    events = group_into_events(anomalies)
+    events.to_csv(OUTPUTS / "events.csv", index=False)
+    n_ev_total = len(events)
+    n_ev_field = int((~events["is_holiday"]).sum()) if not events.empty else 0
+    print(f"  {len(anomalies)} hour-level flags collapse to {n_ev_total} events "
+          f"({n_ev_field} non-holiday)")
+
+    print("\nDefensive check 1 - day-of-week effect (justifies hour-only baseline)...")
+    dow = day_of_week_check(df, cols)
+    mean_red = dow["reduction_pct"].mean()
+    print(f"  Mean residual reduction from adding day-of-week: {mean_red:.1f}%")
+    print("  -> modest gain, not worth 5x baseline sparsity. Hour-only justified.")
+
+    print("\nDefensive check 2 - top-alert baseline confidence (are alerts real?)...")
+    audit = alert_confidence_audit(events, baseline)
+    conf_summary = baseline_confidence_summary(baseline, cols)
+    total_low = conf_summary["n_low_conf_active"].sum()
+    if not audit.empty:
+        n_solid = int((audit["n_obs"] >= 20).sum())
+        print(f"  Top {len(audit)} alerts: {n_solid} backed by full 20-obs baseline, "
+              f"{int((~audit['low_conf']).sum())} not low-confidence")
+    print(f"  Low-confidence active-hour cells across all series: {total_low} "
+          f"(0 = every possible flag rests on a full baseline)")
+    audit.to_csv(OUTPUTS / "alert_confidence_audit.csv", index=False)
+
+    print("\nMultivariate check - PCA (tests independence, justifies univariate choice)...")
+    pca_out = pca_reconstruction_flags(df, cols, baseline)
+    save_pca_scores(pca_out, OUTPUTS / "pca_scores.csv")
+    print(f"  Variance explained by kept components: {pca_out['var_explained']:.1%}")
+    print(f"  PCA-flagged hours (high reconstruction error): {int(pca_out['flags']['pca_flag'].sum())}")
+
+    agree = consensus_with_zscore(anomalies, pca_out["flags"])
+    print(f"  Critical z-score flags also caught by PCA: {agree['n_agree']}/{agree['n_critical']}")
+
+    print("\nMultivariate detector - Isolation Forest + SHAP (works WITH independence)...")
+    iso_out = fit_isolation_forest(df, cols, baseline)
+    save_iso_scores(iso_out, OUTPUTS / "isoforest_scores.csv")
+    iso_con = iso_consensus(anomalies, iso_out["scores"])
+    print(f"  Isolation Forest drop-hours flagged: {iso_con['n_iso_drop_flags']}")
+    print(f"  Also caught by z-score: {iso_con['n_agree']}/{iso_con['n_critical']}")
+    shap_out = shap_reason_codes(iso_out)
+    print("  SHAP top drivers: " + ", ".join(shap_out["global_importance"].head(3).index))
+
     print("\nGenerating anomaly plots...")
     plot_anomaly_overview(df, cols, baseline, anomalies)
     for s in anomalies["series"].unique():
         plot_series_with_anomalies(df, s, baseline, anomalies)
+    plot_corroboration_grid(df, cols, anomalies)
+    plot_pca_detection(df, cols, pca_out, anomalies)
+    plot_isoforest_scores(df, iso_out, anomalies)
+    plot_shap_importance(shap_out)
+    plot_shap_reasons(iso_out, shap_out)
+
+    n_active = len([c for c in cols if c not in ["ListB_field5"]])
+    fp, _, _ = false_positive_rate(anomalies, n_series=n_active, n_hours=len(df))
+    plot_monitoring_dashboard(df, cols, events, fp, baseline=baseline)
 
     print(f"\nDone. {len(anomalies['series'].unique())} series flagged. All outputs in outputs/")
 
