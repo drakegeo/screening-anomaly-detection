@@ -9,7 +9,7 @@ Detects drop anomalies in sanctions screening hit rate data. A drop anomaly is a
 -   Hit rate = total hits / total screening requests. It can exceed 1, because one request can match several list entries.
 -   A zero means no requests arrived that hour (not an anomaly). A NaN means data collection failed (a separate operational issue).
 
-The raw CSV is proprietary and is not included in the repository. Place it at `data/screening_hitrate.csv` before running.
+The raw CSV lives at `data/screening_hitrate.csv`.
 
 ## Approach
 
