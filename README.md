@@ -62,7 +62,7 @@ Each pipeline writes into its own folder under `outputs/`, split into `figures/`
 outputs/
   processing/   figures/  EDA charts (time series, diurnal profiles, data quality)
                 tables/   data_quality_report.csv
-  detection/    figures/  per-series anomaly charts, corroboration, PCA, dashboard
+  detection/    figures/  per-series anomaly charts, PCA, isolation forest, dashboard
                 tables/   anomalies.csv, events.csv, baseline_*.csv, ...
   validation/   figures/  recovery curve + coverage heatmap
                 tables/   injection and recovery results

@@ -19,7 +19,7 @@ from src.detection.isoforest import (
 )
 from src.detection.visualise import (
     plot_series_with_anomalies, plot_anomaly_overview,
-    plot_threshold_sensitivity, plot_corroboration_grid, plot_pca_scree,
+    plot_threshold_sensitivity, plot_pca_scree,
     plot_isoforest_scores, plot_shap_importance, plot_shap_reasons,
     plot_monitoring_dashboard,
 )
@@ -104,7 +104,6 @@ def main() -> None:
     plot_anomaly_overview(df, cols, baseline, anomalies)
     for s in anomalies["series"].unique():
         plot_series_with_anomalies(df, s, baseline, anomalies)
-    plot_corroboration_grid(df, cols, anomalies)
     plot_pca_scree(pca_out)
     plot_isoforest_scores(df, iso_out, anomalies)
     plot_shap_importance(shap_out)
