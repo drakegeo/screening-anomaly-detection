@@ -1,2 +1,32 @@
-.venv
-outputs
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Project-specific
+outputs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Poetry
+poetry.lock
