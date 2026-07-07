@@ -33,7 +33,7 @@ def _add_legend(ax: plt.Axes, present_types: set[str]) -> None:
                markersize=7, markeredgewidth=2.0, linestyle="none",
                label="Holiday zero — likely volume effect, not list failure"),
     ]
-    ax.legend(handles=handles, fontsize=8, loc="upper right")
+    ax.legend(handles=handles, fontsize=10, loc="upper right")
 
 
 def _draw_background(ax: plt.Axes, df: pd.DataFrame) -> None:
@@ -87,11 +87,9 @@ def plot_series_with_anomalies(
         )
 
         # ── TOP: time series ──────────────────────────────────────────────────
-        # red zone = alarm (below threshold); grey zone = expected range
+        # red zone = alarm (below threshold)
         ax_ts.fill_between(df.index, 0, lower,
                            alpha=0.12, color="#c0392b", label="Alarm zone (below threshold)")
-        ax_ts.fill_between(df.index, lower, exp_med,
-                           alpha=0.15, color="#95a5a6", label="Expected range (median ± 2.5 MAD)")
         ax_ts.plot(df.index, exp_med, color="#7f8c8d", linewidth=0.8,
                    alpha=0.7, label="Hourly median baseline")
         ax_ts.plot(df.index, lower, color="#c0392b", linewidth=0.6,
@@ -119,14 +117,15 @@ def plot_series_with_anomalies(
         ax_ts.set_title(
             f"{series}  |  {n_critical} critical flag(s)  +  {n_holiday} holiday zero(s)\n"
             f"Marker colour = hour of day — trace each colour to the diurnal profile below",
-            fontsize=11, fontweight="bold", color="black",
+            fontsize=13, fontweight="bold", color="black",
         )
-        ax_ts.set_xlabel("Date (UTC)", fontsize=9)
-        ax_ts.set_ylabel("Hit rate", fontsize=9)
+        ax_ts.set_xlabel("Date (UTC)", fontsize=11)
+        ax_ts.set_ylabel("Hit rate", fontsize=11)
         # small negative lower bound so y=0 markers sit above the axis spine
         _ymax = ax_ts.get_ylim()[1]
         ax_ts.set_ylim(bottom=-_ymax * 0.03)
         ax_ts.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+        ax_ts.tick_params(axis="both", labelsize=10)
         _add_legend(ax_ts, present_types)
 
         # ── BOTTOM: 24h diurnal baseline profile ──────────────────────────────
@@ -150,20 +149,21 @@ def plot_series_with_anomalies(
             hc = hour_colors[h]
             ax_hr.axvline(h, color=hc, linewidth=1.8, alpha=0.9, zorder=5)
             ax_hr.text(h + 0.2, med_profile.max() * 0.85,
-                       f"{h:02d}h", fontsize=7, color=hc, fontweight="bold")
+                       f"{h:02d}h", fontsize=9, color=hc, fontweight="bold")
 
         ax_hr.set_xlim(-0.8, 23.8)
         ax_hr.set_xticks(range(0, 24, 2))
-        ax_hr.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)], fontsize=7)
-        ax_hr.set_xlabel("Hour of day (UTC)", fontsize=8)
-        ax_hr.set_ylabel("Hit rate", fontsize=8)
+        ax_hr.set_xticklabels([f"{h:02d}:00" for h in range(0, 24, 2)], fontsize=9)
+        ax_hr.set_xlabel("Hour of day (UTC)", fontsize=10)
+        ax_hr.set_ylabel("Hit rate", fontsize=10)
         ax_hr.set_title(
-            "24h Baseline Profile — grey = expected range, red = alarm zone, "
+            "24h Baseline Profile — red = alarm zone, "
             "vertical lines = hours where flag triggered",
-            fontsize=8, color="#555555",
+            fontsize=10, color="#555555",
         )
-        ax_hr.legend(fontsize=7, loc="upper right")
+        ax_hr.legend(fontsize=9, loc="upper right")
         ax_hr.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
+        ax_hr.tick_params(axis="y", labelsize=9)
 
         _save(fig, f"anomaly_{series.lower()}")
 
