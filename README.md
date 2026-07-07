@@ -31,32 +31,45 @@ Special cases:
 
 ## Setup
 
-Requires Python 3.10+. Using Poetry:
+Requires Python 3.10+. Choose one of the two paths below.
+
+**Option A — Poetry (recommended).** Uses `pyproject.toml`, resolves and locks dependencies:
 
 ```
 poetry install
 ```
 
-Or with pip:
+**Option B — plain venv + pip.** Uses `requirements.txt`, no Poetry needed:
 
 ```
-pip install -e .
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv/Scripts/activate
+pip install -r requirements.txt
 ```
+
+`requirements.txt` mirrors the dependencies declared in `pyproject.toml`; keep the two in sync if you change either.
 
 ## Running
 
+With Poetry (Option A):
+
 ```
 poetry run python -m pipelines.processing    # data checks + EDA plots
-poetry run python -m pipelines.detection      # baseline, scoring, plots, results
-poetry run python -m pipelines.validation     # synthetic drop-injection test
+poetry run python -m pipelines.detection     # baseline, scoring, plots, results
+poetry run python -m pipelines.validation    # synthetic drop-injection test
 ```
 
-(Drop `poetry run` if you installed with pip and activated the environment.)
+With an activated venv (Option B) — drop the `poetry run` prefix:
+
+```
+python -m pipelines.processing    # data checks + EDA plots
+python -m pipelines.detection     # baseline, scoring, plots, results
+python -m pipelines.validation    # synthetic drop-injection test
+```
 
 ## Outputs
 
-Each pipeline writes into its own folder under `outputs/`, split into `figures/`
-(plots) and `tables/` (CSV results):
+Each pipeline writes into its own folder under `outputs/`, split into `figures/` (plots) and `tables/` (CSV results):
 
 ```
 outputs/
@@ -68,9 +81,7 @@ outputs/
                 tables/   injection and recovery results
 ```
 
-Key result tables: `detection/tables/anomalies.csv` (every flagged hour with its
-z-score and flag type) and `detection/tables/events.csv` (flags grouped into
-operational events, so a sustained multi-hour drop is one event, not many alerts).
+Key result tables: `detection/tables/anomalies.csv` (every flagged hour with its z-score and flag type) and `detection/tables/events.csv` (flags grouped into operational events, so a sustained multi-hour drop is one event, not many alerts).
 
 ## Project structure
 
@@ -78,7 +89,7 @@ operational events, so a sustained multi-hour drop is one event, not many alerts
 src/processing/   data loading, validation, EDA plots
 src/detection/    baseline, anomaly scoring, PCA check, isolation forest, plots
 pipelines/        entry points (processing, detection, validation)
-data/             raw CSV (not committed)
+data/             raw CSV
 outputs/          results, organised per pipeline (see above)
 ```
 

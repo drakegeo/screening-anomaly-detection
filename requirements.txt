@@ -1,0 +1,9 @@
+# Runtime dependencies (mirror of [project.dependencies] in pyproject.toml).
+# For plain pip / venv installs. Poetry users should use pyproject.toml instead.
+pandas>=2.2
+numpy>=2.1
+matplotlib>=3.9
+seaborn>=0.13
+scipy>=1.14
+scikit-learn>=1.5
+shap>=0.46
