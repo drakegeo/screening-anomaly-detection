@@ -3,10 +3,9 @@
 Run: python main_processing.py
 """
 
-from pathlib import Path
-
 from src.processing.load import load_data, get_series_cols, data_quality_report
 from src.processing.eda import (
+    tables_dir,
     plot_time_series_overview,
     plot_diurnal_heatmap,
     plot_data_quality_map,
@@ -14,8 +13,6 @@ from src.processing.eda import (
     plot_distributions,
     plot_correlation,
 )
-
-OUTPUTS = Path("outputs")
 
 
 def main() -> None:
@@ -28,7 +25,7 @@ def main() -> None:
     print("\nData quality report:")
     report = data_quality_report(df)
     print(report.to_string())
-    report.to_csv(OUTPUTS / "data_quality_report.csv")
+    report.to_csv(tables_dir("processing") / "data_quality_report.csv")
 
     print("\nGenerating EDA plots...")
     plot_time_series_overview(df, cols)
@@ -38,7 +35,7 @@ def main() -> None:
     plot_distributions(df, cols)
     plot_correlation(df, cols)
 
-    print("\nDone. EDA outputs saved to outputs/figures/")
+    print("\nDone. EDA outputs saved to outputs/processing/")
 
 
 if __name__ == "__main__":

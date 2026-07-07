@@ -1,218 +1,89 @@
 # Screening Hit Rate Anomaly Detection
-**Swift Senior Applied Data Scientist — Take-Home Case**
 
-Detects drop anomalies in sanctions screening hit rate data. A drop anomaly is a value that falls significantly below the expected hourly pattern for a specific list/field combination — an early-warning signal for corrupted or truncated sanctions lists.
+Detects drop anomalies in sanctions screening hit rate data. A drop anomaly is an hour where the hit rate for a given list/field falls well below what is normal for that hour of day. The point is early warning: if a sanctions list is truncated or corrupted, its hit rate falls silently and transactions that should be flagged can pass through unscreened. Drops matter more than spikes, which are noisy but safe.
 
----
+## Data
+
+-   480 hourly rows, 20 weekdays, 2023-12-18 to 2024-01-12 (UTC). Weekends excluded.
+-   15 series = 5 sanctions lists x 3 message fields each.
+-   Hit rate = total hits / total screening requests. It can exceed 1, because one request can match several list entries.
+-   A zero means no requests arrived that hour (not an anomaly). A NaN means data collection failed (a separate operational issue).
+
+The raw CSV is proprietary and is not included in the repository. Place it at `data/screening_hitrate.csv` before running.
+
+## Approach
+
+The method is a robust per-series, per-hour-of-day baseline. For each series and each hour of the day we take the 20 weekday values, compute the median and the median absolute deviation (MAD), and score every observation:
+
+```
+z = (value - hourly_median) / (hourly_MAD * 1.4826)
+```
+
+An hour is flagged as a drop when `z < -2.5`. Median and MAD are used instead of mean and standard deviation because the hit rate distributions are skewed and zero-heavy, so robust statistics are not dragged around by outliers or holiday spikes. The baseline is hour-specific because 03:00 and 11:00 behave very differently, and a single global mean would produce constant false alarms overnight.
+
+A second check (PCA) confirms the 15 series are effectively independent, which is why each series is modelled on its own rather than jointly. An Isolation Forest with SHAP reason codes is included as a second, independent view on the same data.
+
+Special cases:
+
+-   `ListB_field5` is inactive (always zero) and is excluded.
+-   `ListB_field6` has high missingness and is treated with a wider threshold.
+-   Public holidays (Dec 25, Jan 1) are tagged; zeros on those days are treated as a volume effect rather than a list failure.
 
 ## Setup
 
-Requires Python 3.10+.
+Requires Python 3.10+. Using Poetry:
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # macOS / Linux
+```
+poetry install
+```
 
+Or with pip:
+
+```
 pip install -e .
 ```
 
----
-
-## How to Run
-
-**Step 1 — Data processing + EDA plots:**
-```bash
-python -m pipelines.processing
-```
-Outputs: `outputs/figures/01_*.png` through `06_*.png`, `outputs/data_quality_report.csv`
-
-**Step 2 — Anomaly detection:**
-```bash
-python -m pipelines.detection
-```
-Outputs: `outputs/figures/07_threshold_sensitivity.png`, `outputs/figures/anomaly_*.png`, `outputs/anomalies.csv`
-
----
-
-## Project Structure
+## Running
 
 ```
-screening-anomaly-detection/
-│
-├── data/
-│   └── screening_hitrate.csv     ← proprietary Swift data (not committed)
-│
-├── src/
-│   ├── processing/
-│   │   ├── load.py               ← data loading, validation, holiday tagging
-│   │   └── eda.py                ← 6 EDA plots
-│   └── detection/
-│       ├── baseline.py           ← robust hourly baseline (median + MAD per series × hour)
-│       ├── anomaly.py            ← primary detector: z-score scoring, flagging, sensitivity
-│       ├── pca.py                ← PCA check (proves independence, justifies univariate)
-│       ├── isoforest.py          ← Isolation Forest + SHAP (multivariate, works on independence)
-│       └── visualise.py          ← all anomaly, diagnostic, and SHAP plots
-│
-├── pipelines/
-│   ├── processing.py             ← entry point: EDA
-│   └── detection.py              ← entry point: anomaly detection
-│
-├── outputs/
-│   ├── figures/                  ← all saved plots
-│   └── anomalies.csv             ← flagged anomalies table
-│
-├── notebooks/
-│   └── 01_exploration.ipynb      ← exploratory analysis
-│
-├── pyproject.toml
-├── ai_usage_log.md
-└── CLAUDE.md                     ← project specification
+poetry run python -m pipelines.processing    # data checks + EDA plots
+poetry run python -m pipelines.detection      # baseline, scoring, plots, results
+poetry run python -m pipelines.validation     # synthetic drop-injection test
 ```
 
----
+(Drop `poetry run` if you installed with pip and activated the environment.)
 
-## Methodology
+## Outputs
 
-The approach is chosen by the data, in five steps.
-
-**Step 0 — Do the 15 series share structure? (method justification)**
-Before choosing a model, we ask whether the series move together — if they did, a
-joint multivariate model would be the right tool. Two independent views say no:
-
-- **Correlation heatmap** (plot 06): pairwise correlations near zero (only ListA
-  fields correlate, ~0.41).
-- **PCA scree** (plot 09): the first principal component explains only **18%** of
-  variance and **11 of 14 components** are needed to reach 90%. Correlated data
-  would concentrate 60–90% in PC1. A PCA reconstruction detector agrees with the
-  z-score detector on only **1 of 44** flags — because there is no shared
-  structure to exploit.
-
-→ **The series are independent. A *linear* multivariate model (PCA) cannot help —
-it needs correlation to compress. The per-series univariate approach is therefore
-the correct primary detector. (Independence does not rule out *all* multivariate
-methods — see Step 3, where a tree-based model exploits exactly this independence.)**
-
-**Step 1 — Robust Hourly Z-Score** (the primary detector) — per series, per hour-of-day:
+Each pipeline writes into its own folder under `outputs/`, split into `figures/`
+(plots) and `tables/` (CSV results):
 
 ```
-z = (observed − hourly_median) / (hourly_MAD × 1.4826)
+outputs/
+  processing/   figures/  EDA charts (time series, diurnal profiles, data quality)
+                tables/   data_quality_report.csv
+  detection/    figures/  per-series anomaly charts, corroboration, PCA, dashboard
+                tables/   anomalies.csv, events.csv, baseline_*.csv, ...
+  validation/   figures/  recovery curve + coverage heatmap
+                tables/   injection and recovery results
 ```
 
-Flag if `z < −2.5` (drop anomaly). "Normal" is hour-of-day specific — 03:00 and
-11:00 have very different baselines — so this is a per-series *time-series* model,
-not a global mean. Baseline fitted on 20 weekdays, excluding weekends. Median and
-MAD (not mean/std) resist the skewed, zero-heavy hit-rate distributions.
+Key result tables: `detection/tables/anomalies.csv` (every flagged hour with its
+z-score and flag type) and `detection/tables/events.csv` (flags grouped into
+operational events, so a sustained multi-hour drop is one event, not many alerts).
 
-**Step 2 — Cross-field corroboration** (plot 08). A corrupted sanctions list would
-depress *all* its fields at once. For each flag we check whether sibling fields of
-the same list also dropped on the same date — separating **list-level failure**
-(all fields) from **field-level noise** (one field).
-
-**Step 3 — Isolation Forest + SHAP** (plots 10–12), the multivariate detector that
-*works* on independent data. Where PCA fails, Isolation Forest thrives: it isolates
-anomalies by randomly splitting a *single* feature at a time, so sharply-separable
-independent features are isolated near the tree root. It is fed the same
-standardised-residual matrix, clipped to the downward side (drops only), and scores
-each hour for how easily it is isolated.
-
-- Agreement: **11 of 44** z-score critical flags are independently caught (vs 1/44
-  for PCA) — a genuine, statistically distinct second opinion.
-- **SHAP reason codes** (plots 11–12) attribute each alert to specific series
-  ("ListA_field1 drove this hour"). Because the features are uncorrelated, SHAP
-  attributions are clean — no multicollinearity ambiguity. This is the reason code a
-  compliance officer needs to act. Global SHAP importance is roughly even across all
-  series, reinforcing the independence finding (no single shared driver).
-
-**Three flag types:**
-
-| Symbol | Type | Meaning |
-|--------|------|---------|
-| `○` | `drop_zscore` | Statistically significant drop below hourly baseline |
-| `○` | `contextual_zero` | Zero during a normally active hour (non-holiday) |
-| `×` | `contextual_zero_holiday` | Zero on Dec 25 / Jan 1 — volume effect, not list failure |
-
-**Special handling:**
-- `ListB_field5` — excluded (inactive, always zero, no baseline possible)
-- `ListB_field6` — wider threshold (−2.0), excluded from contextual zero (high missingness, unstable)
-- `NaN` values — flagged as data collection failures, not anomalies
-
----
-
-## Results Summary (threshold = −2.5)
-
-| Series | Critical flags | Holiday zeros | Worst z |
-|--------|---------------|---------------|---------|
-| ListA_field1 | 2 | 0 | −6.56 |
-| ListA_field3 | 8 | 6 | −4.31 |
-| ListC_field9 | 10 | 0 | −4.31 |
-| ListE_field13 | 5 | 2 | −3.79 |
-| ListD_field10 | 9 | 4 | −3.70 |
-| ListB_field4 | 7 | 0 | −3.66 |
-| ListD_field11 | 3 | 0 | −3.25 |
-| ListE_field14 | 0 | 1 | — |
-
-17 non-holiday critical flags across 7 series. Most holiday-period flags are volume-driven.
-
-### Conclusion — list-level vs field-level
-
-The corroboration grid (plot 08) is the deciding evidence: **for no list do the
-fields drop together on the same date.** A corrupted list would hit all its fields
-simultaneously — that signature is absent everywhere.
-
-→ **No list-level failure occurred in this window.** Every real anomaly is
-field-scoped (a data-pipeline / configuration issue on one field), not sanctions
-list corruption. Operationally reassuring: the screening lists appear healthy.
-
-**Event-level counting:** 57 hour-level flags collapse to **42 events (17 non-holiday)** —
-a sustained multi-hour drop is one operational event, not many alerts (see `outputs/events.csv`).
-
-The field-level drops worth investigating (ranked by the event view):
-- **ListC_field9** — the top offender: worst z=−4.30, 5 events, solid baseline (median 0.09).
-- **ListA_field3** — the clearest *systematic* signature: recurring drops at exactly 10:00 on
-  Jan 2, 3, 4, 5 (same field, same hour, consecutive days) — stronger evidence than raw severity.
-- **ListD_field11** — recurring drops (Dec 29, Jan 12).
-
-**Every top alert rests on a full 20-observation baseline** (zero low-confidence active cells
-across all series — see `outputs/alert_confidence_audit.csv`), so none is a low-volume artifact.
-
-Holiday flags (Dec 25 / Jan 1) are volume effects, not failures.
-
-**Recommended alerting rule:** escalate only when ≥2 fields of the same list drop
-together (list-level); log single-field drops for review. Under this rule no
-false alarm would have fired here — the correct outcome.
-
----
-
-## Validation
-
-With no ground-truth labels, the detector is validated by **synthetic drop injection**
-(`python -m pipelines.validation`, plot 13). Known drops are injected analytically into each
-baseline cell and scored with the production formula:
+## Project structure
 
 ```
-obs_injected = hourly_median × (1 − drop_fraction);  detected if z < −2.5
+src/processing/   data loading, validation, EDA plots
+src/detection/    baseline, anomaly scoring, PCA check, isolation forest, plots
+pipelines/        entry points (processing, detection, validation)
+data/             raw CSV (not committed)
+outputs/          results, organised per pipeline (see above)
 ```
 
-Recovery curve across all 128 active cells: catches large failures reliably (59% at 90% drop),
-weaker on subtle ones (21% at 50% drop) — **calibrated for precision (0.25% false-alarm rate),
-not recall.** The overnight blind spots on the coverage heatmap are the hidden-denominator
-problem made visible: low volume → wide MAD → only large drops clear the threshold.
+## Limitations
 
-**Design choices tested, not assumed:**
-- **Hour-of-day vs hour × day-of-week:** day-of-week reduces residual spread only 11.5% while
-  cutting baseline from 20 → 4 obs/cell. Hour-only is the right granularity.
-
----
-
-## Known Limitations
-
-1. **Hidden denominator** — only hit rate ratio available, not underlying request volume. Cannot distinguish genuine drop from low-volume noise. **The single most valuable upgrade: log request counts.**
-2. **No ground truth** — validated by synthetic injection (analytical recovery curve), not precision/recall against labels.
-3. **Small baseline** — 20 observations per hour × series. Estimates have uncertainty at sparse hours.
-4. **Boiling-frog risk** — a rolling baseline would adapt to slow degradation and hide it. Production fix: freeze a golden baseline from a certified-healthy period.
-5. **Weekend exclusion** — assumed correct per brief; weekend behaviour unknown.
-
----
-
-*Data is proprietary Swift operational data provided under confidentiality for this hiring exercise.*
+-   Only the hit rate ratio is available, not the underlying request volume. Without request counts we cannot fully separate a genuine drop from low-volume noise, which is why overnight hours are noisier. Logging request counts would be the single most useful addition.
+-   There are no ground-truth labels, so the detector is validated by injecting known drops and measuring how many are recovered, not by precision/recall.
+-   Only 20 observations per hour per series, so baselines carry some uncertainty at sparse hours.

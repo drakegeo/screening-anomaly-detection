@@ -13,14 +13,25 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-FIGURES_DIR = Path(__file__).parent.parent.parent / "outputs" / "figures"
+OUTPUTS_DIR = Path(__file__).parent.parent.parent / "outputs"
+
+
+def figures_dir(process: str) -> Path:
+    """Figures folder for a pipeline stage, e.g. outputs/detection/figures/."""
+    d = OUTPUTS_DIR / process / "figures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def tables_dir(process: str) -> Path:
+    """CSV/results folder for a pipeline stage, e.g. outputs/detection/tables/."""
+    d = OUTPUTS_DIR / process / "tables"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-BLUE = "#2c5f8a"
-LIGHT_BLUE = "#a8c8e8"
 GREY = "#8a9bb0"
 LIGHT_GREY = "#e8ecf0"
-ACCENT = "#c0392b"  # anomaly red (not used in EDA but kept consistent)
 
 LIST_COLORS = {
     "ListA": "#2c5f8a",
@@ -52,9 +63,8 @@ def _list_color(col: str) -> str:
     return GREY
 
 
-def _save(fig: plt.Figure, name: str, dpi: int = 150) -> None:
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    path = FIGURES_DIR / f"{name}.png"
+def _save(fig: plt.Figure, name: str, process: str, dpi: int = 150) -> None:
+    path = figures_dir(process) / f"{name}.png"
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     print(f"  Saved: {path}")
     plt.close(fig)
@@ -108,7 +118,7 @@ def plot_time_series_overview(df: pd.DataFrame, series_cols: list[str]) -> None:
                     ax.axvspan(timestamps[i - 1], timestamps[i], color=LIGHT_GREY, alpha=0.6, linewidth=0)
 
         fig.tight_layout()
-        _save(fig, "01_time_series_overview")
+        _save(fig, "01_time_series_overview", "processing")
 
 
 # ── Plot 2: Diurnal profile heatmap ───────────────────────────────────────────
@@ -162,7 +172,7 @@ def plot_diurnal_heatmap(df: pd.DataFrame, series_cols: list[str]) -> None:
 
         fig.suptitle("Diurnal Patterns — When Are Series Active?", fontsize=13, fontweight="bold", y=1.02)
         fig.tight_layout()
-        _save(fig, "02_diurnal_heatmap")
+        _save(fig, "02_diurnal_heatmap", "processing")
 
 
 # ── Plot 3: Missing & zero data map ───────────────────────────────────────────
@@ -210,7 +220,7 @@ def plot_data_quality_map(df: pd.DataFrame, series_cols: list[str]) -> None:
         cbar.ax.tick_params(labelsize=9)
 
         fig.tight_layout()
-        _save(fig, "03_data_quality_map")
+        _save(fig, "03_data_quality_map", "processing")
 
 
 # ── Plot 4: Hourly profiles per series (small multiples) ─────────────────────
@@ -248,7 +258,7 @@ def plot_hourly_profiles(df: pd.DataFrame, series_cols: list[str]) -> None:
                 ax.set_visible(False)
 
         fig.tight_layout()
-        _save(fig, "04_hourly_profiles")
+        _save(fig, "04_hourly_profiles", "processing")
 
 
 # ── Plot 5: Value distributions (non-zero only) ───────────────────────────────
@@ -295,7 +305,7 @@ def plot_distributions(df: pd.DataFrame, series_cols: list[str]) -> None:
         ax.legend(handles=handles, title="Sanctions List", fontsize=8, title_fontsize=8, loc="upper right")
 
         fig.tight_layout()
-        _save(fig, "05_distributions")
+        _save(fig, "05_distributions", "processing")
 
 
 # ── Plot 6: Correlation heatmap ───────────────────────────────────────────────
@@ -311,6 +321,7 @@ def plot_correlation(df: pd.DataFrame, series_cols: list[str]) -> None:
         sns.heatmap(
             corr,
             ax=ax,
+            mask=mask,
             cmap="RdBu_r",
             vmin=-1,
             vmax=1,
@@ -331,7 +342,7 @@ def plot_correlation(df: pd.DataFrame, series_cols: list[str]) -> None:
         ax.tick_params(axis="y", rotation=0, labelsize=8)
 
         fig.tight_layout()
-        _save(fig, "06_correlation_heatmap")
+        _save(fig, "06_correlation_heatmap", "processing")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -353,4 +364,4 @@ if __name__ == "__main__":
     plot_distributions(df, cols)
     plot_correlation(df, cols)
 
-    print("\nDone. All figures saved to outputs/figures/")
+    print("\nDone. All figures saved to outputs/processing/figures/")

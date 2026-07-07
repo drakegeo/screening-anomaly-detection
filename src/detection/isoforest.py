@@ -31,7 +31,6 @@ from src.detection.pca import _standardised_residual_matrix
 RANDOM_STATE = 42
 N_ESTIMATORS = 300
 SCORE_MAD_K = 3.0   # robust flag threshold on the anomaly score
-TOP_N = 20          # operational "top-N to review" view
 
 
 def fit_isolation_forest(

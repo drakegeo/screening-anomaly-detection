@@ -1,7 +1,5 @@
 """Anomaly visualisations with three-tier flag taxonomy."""
 
-from pathlib import Path
-
 import matplotlib
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -9,7 +7,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
-from src.processing.eda import FIGURES_DIR, STYLE, LIGHT_GREY, _list_color, _save
+from src.processing.eda import STYLE, LIGHT_GREY, _list_color, _save
 
 BAND_MULTIPLIER = 2.5
 
@@ -21,7 +19,7 @@ FLAG_STYLES = {
 }
 
 
-def _add_legend(ax: plt.Axes, present_types: set[str]) -> None:
+def _add_legend(ax: plt.Axes) -> None:
     """Fixed two-entry legend shown on every plot for consistency."""
     from matplotlib.lines import Line2D
     handles = [
@@ -67,13 +65,9 @@ def plot_series_with_anomalies(
     lower = np.maximum(exp_med - BAND_MULTIPLIER * exp_mad, 0)
 
     flags = anomalies[anomalies["series"] == series]
-    present_types = set(flags["flag_type"].unique())
-
     critical_flags = flags[flags["flag_type"].isin(["drop_zscore", "contextual_zero"])]
-    holiday_flags  = flags[flags["flag_type"] == "contextual_zero_holiday"]
 
     critical_hours = sorted(set(pd.to_datetime(critical_flags["timestamp"]).dt.hour.unique()))
-    holiday_hours  = sorted(set(pd.to_datetime(holiday_flags["timestamp"]).dt.hour.unique()))
     flagged_hours  = critical_hours  # bottom panel lines = critical only
 
     # one distinct color per critical hour — offset +5 to avoid series line colors
@@ -126,7 +120,7 @@ def plot_series_with_anomalies(
         ax_ts.set_ylim(bottom=-_ymax * 0.03)
         ax_ts.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
         ax_ts.tick_params(axis="both", labelsize=10)
-        _add_legend(ax_ts, present_types)
+        _add_legend(ax_ts)
 
         # ── BOTTOM: 24h diurnal baseline profile ──────────────────────────────
         hour_range = np.arange(24)
@@ -165,7 +159,7 @@ def plot_series_with_anomalies(
         ax_hr.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
         ax_hr.tick_params(axis="y", labelsize=9)
 
-        _save(fig, f"anomaly_{series.lower()}")
+        _save(fig, f"anomaly_{series.lower()}", "detection")
 
 
 def plot_anomaly_overview(
@@ -233,7 +227,7 @@ def plot_anomaly_overview(
                    fontsize=8, bbox_to_anchor=(0.5, -0.02))
 
         fig.tight_layout()
-        _save(fig, "anomaly_overview")
+        _save(fig, "anomaly_overview", "detection")
 
 
 def plot_threshold_sensitivity(sensitivity_df: "pd.DataFrame") -> None:
@@ -274,7 +268,7 @@ def plot_threshold_sensitivity(sensitivity_df: "pd.DataFrame") -> None:
                         ha="center", va="bottom", fontsize=8, color="#444444")
 
         fig.tight_layout()
-        _save(fig, "07_threshold_sensitivity")
+        _save(fig, "07_threshold_sensitivity", "detection")
 
 
 def plot_corroboration_grid(
@@ -288,7 +282,6 @@ def plot_corroboration_grid(
     Vertical red lines at critical flag timestamps, shared x-axis.
     Lines that visually align across all rows of a column indicate a
     list-level failure (all fields of that list affected simultaneously).
-    Dashed black lines = holiday zeros (volume effect).
     """
     from src.processing.eda import LIST_COLORS
 
@@ -303,7 +296,6 @@ def plot_corroboration_grid(
             grid[(row_idx, col_idx)] = series
 
     critical = anomalies[anomalies["flag_type"].isin(["drop_zscore", "contextual_zero"])]
-    holiday  = anomalies[anomalies["flag_type"] == "contextual_zero_holiday"]
 
     # weekend gap spans (for shading)
     timestamps = df.index
@@ -365,111 +357,54 @@ def plot_corroboration_grid(
                 ax.tick_params(axis="x", labelbottom=False)
 
         fig.tight_layout()
-        _save(fig, "08_corroboration_grid")
+        _save(fig, "08_corroboration_grid", "detection")
 
 
-def plot_pca_detection(
-    df: pd.DataFrame,
-    series_cols: list[str],
-    pca_out: dict,
-    anomalies: pd.DataFrame,
-) -> None:
-    """PCA diagnostic — tests whether a multivariate detector helps here.
+def plot_pca_scree(pca_out: dict) -> None:
+    """PCA scree — the independence proof.
 
-    Left : scree plot. If variance were concentrated in the first 1–2 components,
-           the series would share structure and PCA would be powerful. Here it is
-           spread almost evenly → series are independent → PCA cannot compress →
-           multivariate detection adds nothing over the per-series z-score.
-    Right: SPE reconstruction error over time with the z-score critical flags
-           overlaid. Low overlap confirms the two views disagree — because there
-           is no shared structure for PCA to exploit.
+    If variance were concentrated in the first 1–2 components the series would
+    share structure and a joint multivariate model would be right. Here it is
+    spread almost evenly (PC1 ~18%, 11/14 comps to reach 90%) → the series are
+    independent → the per-series univariate baseline is the correct architecture.
     """
-    import matplotlib.dates as mdates
-    from matplotlib.lines import Line2D
-
     var_ratio = pca_out["var_ratio"]
     cum = pca_out["cum_var"]
     n = pca_out["n_series"]
     k = pca_out["k"]
-    spe = pca_out["spe"]
-    threshold = pca_out["threshold"]
-
-    critical = anomalies[
-        anomalies["flag_type"].isin(["drop_zscore", "contextual_zero"])
-    ].copy()
-    critical["timestamp"] = pd.to_datetime(critical["timestamp"])
-
-    ts = df.index
-    gaps = [(ts[i - 1], ts[i]) for i in range(1, len(ts))
-            if (ts[i] - ts[i - 1]).total_seconds() / 3600 > 24]
 
     with plt.rc_context(STYLE):
-        fig, (ax_scree, ax_spe) = plt.subplots(
-            1, 2, figsize=(20, 6), gridspec_kw={"width_ratios": [1, 2]},
-        )
+        fig, ax = plt.subplots(figsize=(11, 6))
 
-        # ── LEFT: scree plot (the proof of independence) ─────────────────────
         x = np.arange(1, n + 1)
-        ax_scree.bar(x, var_ratio, color="#2c5f8a", alpha=0.85,
-                     label="Variance per component")
-        ax_scree.plot(x, cum, color="#c0392b", marker="o", markersize=4,
-                      linewidth=1.5, label="Cumulative variance")
-        ax_scree.axhline(0.90, color="#7f8c8d", linestyle="--", linewidth=1,
-                         label="90% variance")
-        ax_scree.axvline(k, color="#e67e22", linestyle=":", linewidth=1.5,
-                         label=f"{k} of {n} comps to reach 90%")
+        ax.bar(x, var_ratio, color="#2c5f8a", alpha=0.85,
+               label="Variance per component")
+        ax.plot(x, cum, color="#c0392b", marker="o", markersize=5,
+                linewidth=1.5, label="Cumulative variance")
+        ax.axhline(0.90, color="#7f8c8d", linestyle="--", linewidth=1,
+                   label="90% variance")
+        ax.axvline(k, color="#e67e22", linestyle=":", linewidth=1.5,
+                   label=f"{k} of {n} components to reach 90%")
         # reference: what a correlated dataset would look like
-        ax_scree.annotate(
-            f"PC1 = {var_ratio[0]:.0%}\n(correlated data → PC1 60–90%)",
-            xy=(1, var_ratio[0]), xytext=(3, 0.55), fontsize=8,
+        ax.annotate(
+            f"PC1 = {var_ratio[0]:.0%}\n(correlated data would be 60–90%)",
+            xy=(1, var_ratio[0]), xytext=(3, 0.55), fontsize=11,
             color="#c0392b",
             arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1),
         )
-        ax_scree.set_xlabel("Principal component", fontsize=9)
-        ax_scree.set_ylabel("Variance share", fontsize=9)
-        ax_scree.set_title(
-            "Scree — Variance Spread Evenly = Independent Series\n"
-            "(no compression possible → PCA cannot help)",
-            fontsize=10, fontweight="bold",
+        ax.set_xlabel("Principal component", fontsize=11)
+        ax.set_ylabel("Variance share", fontsize=11)
+        ax.set_title(
+            "PCA Scree — Variance Spread Evenly = Independent Series\n"
+            "(no compression possible → per-series baseline is the right choice)",
+            fontsize=13, fontweight="bold",
         )
-        ax_scree.legend(fontsize=7.5, loc="center right")
-        ax_scree.set_ylim(0, 1.02)
+        ax.legend(fontsize=10, loc="center right")
+        ax.set_ylim(0, 1.02)
+        ax.tick_params(labelsize=10)
 
-        # ── RIGHT: SPE timeline vs z-score flags ─────────────────────────────
-        for t0, t1 in gaps:
-            ax_spe.axvspan(t0, t1, color=LIGHT_GREY, alpha=0.5, linewidth=0)
-        ax_spe.plot(spe.index, spe.values, color="#2c5f8a", linewidth=0.9,
-                    label="PCA reconstruction error (SPE)")
-        ax_spe.fill_between(spe.index, 0, spe.values, alpha=0.12, color="#2c5f8a")
-        ax_spe.axhline(threshold, color="#e67e22", linestyle="--", linewidth=1.2,
-                       label=f"PCA flag threshold ({threshold:.1f})")
-
-        ymax = float(spe.max())
-        for t in critical["timestamp"]:
-            ax_spe.axvline(t, color="#c0392b", linewidth=0.8, alpha=0.35, zorder=1)
-        ax_spe.plot([], [], color="#c0392b", linewidth=0.8, alpha=0.5,
-                    label="z-score critical flag")
-
-        ax_spe.set_ylabel("Reconstruction error (SPE)", fontsize=9)
-        ax_spe.set_xlabel("Date (UTC)", fontsize=9)
-        ax_spe.set_ylim(0, ymax * 1.05)
-        ax_spe.xaxis.set_major_locator(mdates.DayLocator(interval=2))
-        ax_spe.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-        ax_spe.tick_params(axis="x", rotation=45, labelsize=8)
-        ax_spe.set_title(
-            "PCA Error vs z-score Flags — Little Overlap\n"
-            "(PCA spikes on sparse series, misses the real per-series drops)",
-            fontsize=10, fontweight="bold",
-        )
-        ax_spe.legend(fontsize=8, loc="upper right")
-
-        fig.suptitle(
-            "Multivariate PCA Check — Empirically Confirms Independence, "
-            "Validates the Univariate z-score Choice",
-            fontsize=12, fontweight="bold", y=1.02,
-        )
         fig.tight_layout()
-        _save(fig, "09_pca_diagnostic")
+        _save(fig, "09_pca_diagnostic", "detection")
 
 
 def plot_isoforest_scores(
@@ -545,7 +480,7 @@ def plot_isoforest_scores(
                   loc="upper right")
 
         fig.tight_layout()
-        _save(fig, "10_isoforest_scores")
+        _save(fig, "10_isoforest_scores", "detection")
 
 
 def plot_shap_importance(shap_out: dict) -> None:
@@ -570,7 +505,7 @@ def plot_shap_importance(shap_out: dict) -> None:
         for i, v in enumerate(imp.values):
             ax.text(v, i, f" {v:.3f}", va="center", fontsize=7, color="#444444")
         fig.tight_layout()
-        _save(fig, "11_shap_importance")
+        _save(fig, "11_shap_importance", "detection")
 
 
 def plot_shap_reasons(iso_out: dict, shap_out: dict, top_n: int = 12) -> None:
@@ -625,7 +560,7 @@ def plot_shap_reasons(iso_out: dict, shap_out: dict, top_n: int = 12) -> None:
                 edgecolor="black", linewidth=1.4))
 
         fig.tight_layout()
-        _save(fig, "12_shap_reasons")
+        _save(fig, "12_shap_reasons", "detection")
 
 
 def plot_validation_recovery(
@@ -757,7 +692,7 @@ def plot_validation_recovery(
         )
 
         fig.tight_layout()
-        _save(fig, "13_validation")
+        _save(fig, "13_validation", "validation")
 
 
 # ── List → field mapping (5 lists × 3 fields) ──────────────────────────────────
@@ -1007,4 +942,4 @@ def plot_monitoring_dashboard(
             "Sanctions Screening — Drop Anomaly Monitoring Dashboard",
             fontsize=15, fontweight="bold", y=0.98,
         )
-        _save(fig, "14_dashboard")
+        _save(fig, "14_dashboard", "detection")

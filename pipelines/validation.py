@@ -17,8 +17,6 @@ Results are written to outputs/validation/ and figure 13 is saved.
 Run: python -m pipelines.validation
 """
 
-from pathlib import Path
-
 from src.processing.load import load_data, get_series_cols
 from src.detection.baseline import fit_baseline
 from src.detection.anomaly import score_anomalies
@@ -31,8 +29,7 @@ from src.detection.validation import (
     DROP_FRACTIONS,
 )
 from src.detection.visualise import plot_validation_recovery
-
-OUTPUTS = Path("outputs")
+from src.processing.eda import tables_dir
 
 
 def main() -> None:
@@ -84,8 +81,7 @@ def main() -> None:
         print(f"  {series:>22}  {n_hrs:>10}  {r50:>12.1%}")
 
     # Save outputs
-    out_dir = OUTPUTS / "validation"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = tables_dir("validation")
 
     results.to_csv(out_dir / "injection_test_cells.csv", index=False)
     rates.to_csv(out_dir / "recovery_by_series.csv")
@@ -94,15 +90,15 @@ def main() -> None:
     import pandas as pd
     pd.DataFrame([stats]).to_csv(out_dir / "coverage_summary.csv", index=False)
 
-    print(f"\nGenerating validation figure (13_validation.png)...")
+    print("\nGenerating validation figure (13_validation.png)...")
     plot_validation_recovery(results, rates, overall, fp, stats)
 
     print(f"\nDone. Outputs in {out_dir}/")
-    print(f"  injection_test_cells.csv  — per-(series, hour) detection results")
-    print(f"  recovery_by_series.csv    — recovery rates per series")
-    print(f"  overall_recovery.csv      — mean recovery per magnitude")
-    print(f"  coverage_summary.csv      — headline stats")
-    print(f"  outputs/figures/13_validation.png  — recovery curve + coverage heatmap")
+    print("  injection_test_cells.csv  — per-(series, hour) detection results")
+    print("  recovery_by_series.csv    — recovery rates per series")
+    print("  overall_recovery.csv      — mean recovery per magnitude")
+    print("  coverage_summary.csv      — headline stats")
+    print("  outputs/validation/figures/13_validation.png  — recovery curve + coverage heatmap")
 
 
 if __name__ == "__main__":
