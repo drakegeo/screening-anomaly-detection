@@ -1,2 +1,0 @@
-n_active_cells,n_total_cells,pct_cells_active,median_min_detectable_drop,pct_cells_detectable_at_50pct,pct_cells_detectable_at_25pct,recovery_at_10pct,recovery_at_20pct,recovery_at_30pct,recovery_at_40pct,recovery_at_50pct,recovery_at_60pct,recovery_at_70pct,recovery_at_80pct,recovery_at_90pct,n_fp_flags,n_scored_pairs
-128,336,0.381,0.795,0.211,0.0,0.0,0.0,0.008,0.094,0.211,0.352,0.391,0.508,0.586,17,6720
