@@ -180,6 +180,62 @@ def coverage_summary(results: pd.DataFrame) -> dict:
     return stats
 
 
+# Thresholds to compare when defending the -2.5 operating point.
+THRESHOLD_GRID = [-2.0, -2.5, -3.0]
+
+
+def threshold_tradeoff(
+    df: pd.DataFrame,
+    series_cols: list[str],
+    baseline: dict[str, pd.DataFrame],
+    n_hours: int = 480,
+    magnitudes: tuple[float, ...] = (0.50, 0.90),
+) -> pd.DataFrame:
+    """Quantify the false-alarm vs sensitivity trade-off across candidate thresholds.
+
+    For each threshold in THRESHOLD_GRID, measures both sides of the knee-point
+    decision:
+
+        false-alarm side : non-holiday z-score drop flags on the real data
+                           (the base flag rate on presumed-clean hours)
+        sensitivity side : analytical recovery of injected drops of each
+                           magnitude, across all active (series, hour) cells
+
+    Recovery is closed-form: a drop of fraction f in a cell trips z < t exactly
+    when snr > |t| / f, so the recovery rate is the share of active cells whose
+    signal-to-noise clears that bar. No simulation or randomness.
+
+    Returns a DataFrame indexed by threshold with columns:
+        n_fp_flags, fp_rate, recovery_at_<N>  (one per magnitude, as a fraction)
+    """
+    from src.detection.anomaly import score_anomalies
+
+    cells = run_injection_test(baseline, series_cols)
+    active = cells[cells["active"] & ~cells["excluded"]]
+    snr = active["snr"].dropna().to_numpy()
+
+    n_series = len([c for c in series_cols if c not in INACTIVE_SERIES])
+    total_pairs = n_series * n_hours
+
+    rows = []
+    for t in THRESHOLD_GRID:
+        a = score_anomalies(df, series_cols, baseline, drop_threshold=t)
+        n_fp = int(((a["flag_type"] == "drop_zscore") & (~a["is_holiday"])).sum())
+        row: dict = {
+            "threshold": t,
+            "n_fp_flags": n_fp,
+            "fp_rate": round(n_fp / total_pairs, 5),
+        }
+        for f in magnitudes:
+            # detected in a cell iff snr * f > |t|  (i.e. z = -f*snr < t)
+            row[f"recovery_at_{int(f * 100)}"] = (
+                round(float((snr * f > abs(t)).mean()), 4) if len(snr) else np.nan
+            )
+        rows.append(row)
+
+    return pd.DataFrame(rows).set_index("threshold")
+
+
 def false_positive_rate(
     anomalies: pd.DataFrame, n_series: int, n_hours: int = 480
 ) -> tuple[float, int, int]:

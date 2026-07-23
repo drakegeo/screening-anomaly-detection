@@ -30,7 +30,7 @@ from src.detection.pca import _standardised_residual_matrix
 
 RANDOM_STATE = 42
 N_ESTIMATORS = 300
-SCORE_MAD_K = 3.0   # robust flag threshold on the anomaly score
+SCORE_MAD_K = 3   # robust flag threshold on the anomaly score
 
 
 def fit_isolation_forest(
@@ -68,6 +68,7 @@ def fit_isolation_forest(
 
     # score_samples: higher = more normal. Invert so higher = more anomalous.
     raw = model.score_samples(X)
+
     anomaly_score = -raw
 
     med = np.median(anomaly_score)

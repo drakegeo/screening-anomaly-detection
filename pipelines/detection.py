@@ -8,7 +8,7 @@ from src.detection.baseline import fit_baseline, save_baseline
 from src.detection.anomaly import (
     score_anomalies, anomaly_summary, threshold_sensitivity, group_into_events,
 )
-from src.detection.validation import false_positive_rate
+from src.detection.validation import false_positive_rate, threshold_tradeoff
 from src.detection.diagnostics import (
     day_of_week_check, alert_confidence_audit, baseline_confidence_summary,
 )
@@ -19,7 +19,7 @@ from src.detection.isoforest import (
 )
 from src.detection.visualise import (
     plot_series_with_anomalies, plot_anomaly_overview,
-    plot_threshold_sensitivity, plot_pca_scree,
+    plot_threshold_sensitivity, plot_threshold_tradeoff, plot_pca_scree,
     plot_isoforest_scores, plot_shap_importance, plot_shap_reasons,
     plot_monitoring_dashboard,
 )
@@ -35,6 +35,7 @@ def main() -> None:
 
     print("\nFitting hourly baseline (median + MAD per series x hour)...")
     baseline = fit_baseline(df, cols)
+
     save_baseline(baseline, TABLES)
     n_low = baseline["low_conf"].sum().sum()
     print(f"  Low-confidence cells (n_obs < 3): {n_low}")
@@ -43,6 +44,12 @@ def main() -> None:
     sens = threshold_sensitivity(df, cols, baseline)
     print(sens.to_string())
     plot_threshold_sensitivity(sens)
+
+    print("\nThreshold trade-off (defends the -2.5 knee: false alarms vs sensitivity)...")
+    tradeoff = threshold_tradeoff(df, cols, baseline, n_hours=len(df))
+    print(tradeoff.to_string())
+    tradeoff.to_csv(TABLES / "threshold_tradeoff.csv")
+    plot_threshold_tradeoff(tradeoff)
 
     print("\nScoring anomalies (threshold = -2.5)...")
     anomalies = score_anomalies(df, cols, baseline)

@@ -11,6 +11,7 @@ from src.processing.eda import (
     plot_data_quality_map,
     plot_hourly_profiles,
     plot_distributions,
+    plot_skew_mean_vs_median,
     plot_correlation,
 )
 
@@ -33,6 +34,7 @@ def main() -> None:
     plot_data_quality_map(df, cols)
     plot_hourly_profiles(df, cols)
     plot_distributions(df, cols)
+    plot_skew_mean_vs_median(df, cols)
     plot_correlation(df, cols)
 
     print("\nDone. EDA outputs saved to outputs/processing/")

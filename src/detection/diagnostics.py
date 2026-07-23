@@ -41,12 +41,13 @@ def day_of_week_check(
     rows = []
     for c in active:
         med_h = df.groupby("hour_of_day")[c].transform("median")
+
         mad_h = (df[c] - med_h).abs().median()
-
         med_hd = df.groupby(["hour_of_day", "day_of_week"])[c].transform("median")
-        mad_hd = (df[c] - med_hd).abs().median()
 
+        mad_hd = (df[c] - med_hd).abs().median()
         red = (1 - mad_hd / mad_h) * 100 if mad_h > 0 else np.nan
+
         rows.append({
             "series": c,
             "hour_mad": round(float(mad_h), 6),

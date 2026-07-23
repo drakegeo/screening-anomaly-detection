@@ -308,6 +308,66 @@ def plot_distributions(df: pd.DataFrame, series_cols: list[str]) -> None:
         _save(fig, "05_distributions", "processing")
 
 
+# ── Plot 5b: Skew — why median over mean ──────────────────────────────────────
+def plot_skew_mean_vs_median(df: pd.DataFrame, series_cols: list[str]) -> None:
+    """Per-field histograms with mean vs median marked — the robustness argument.
+
+    Hit-rate distributions are right-skewed and zero-inflated, so the mean is
+    dragged upward by a few large values while the median sits on the bulk of
+    the data. Marking both on each field's histogram shows visually why the
+    baseline uses median + MAD rather than mean + std: the mean/median gap is
+    exactly the leverage an outlier or holiday spike would have on the baseline.
+    """
+    from scipy.stats import skew
+
+    active_cols = [c for c in series_cols if c != "ListB_field5"]
+    n = len(active_cols)
+    ncol = 5
+    nrow = int(np.ceil(n / ncol))
+
+    with plt.rc_context(STYLE):
+        fig, axes = plt.subplots(nrow, ncol, figsize=(28, 5.2 * nrow))
+
+        for ax, col in zip(axes.flat, active_cols):
+            color = _list_color(col)
+            vals = df[col].dropna()
+            vals = vals[vals > 0]  # non-zero: the active-hour distribution
+            if len(vals) < 2:
+                ax.set_visible(False)
+                continue
+
+            mean_v = float(vals.mean())
+            med_v = float(vals.median())
+            sk = float(skew(vals))
+
+            # clip x-view at p99 so the tail doesn't flatten the bulk
+            hi = float(np.quantile(vals, 0.99))
+            ax.hist(vals, bins=40, range=(0, hi), color=color, alpha=0.55,
+                    edgecolor="white", linewidth=0.3)
+
+            ax.axvline(med_v, color="#145a32", linewidth=3.0,
+                       label=f"median = {med_v:.3f}")
+            ax.axvline(mean_v, color="#c0392b", linewidth=3.0, linestyle="--",
+                       label=f"mean = {mean_v:.3f}")
+
+            ax.set_title(col, fontsize=20, fontweight="bold", color=color)
+            ax.tick_params(labelsize=14)
+            ax.text(0.96, 0.96,
+                    f"skew = {sk:.1f}\nmean/median = {mean_v / med_v:.2f}x",
+                    transform=ax.transAxes, ha="right", va="top", fontsize=15,
+                    color="#2c3e50",
+                    bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.8))
+            ax.legend(fontsize=14, loc="center right")
+
+        for ax in axes.flat[n:]:
+            ax.set_visible(False)
+
+        fig.supxlabel("Hit rate (non-zero values, x clipped at 99th pct)", fontsize=20)
+        fig.supylabel("Frequency", fontsize=20)
+        fig.tight_layout()
+        _save(fig, "05b_skew_mean_vs_median", "processing")
+
+
 # ── Plot 6: Correlation heatmap ───────────────────────────────────────────────
 def plot_correlation(df: pd.DataFrame, series_cols: list[str]) -> None:
     """15×15 Spearman correlation heatmap between all series."""
@@ -362,6 +422,7 @@ if __name__ == "__main__":
     plot_data_quality_map(df, cols)
     plot_hourly_profiles(df, cols)
     plot_distributions(df, cols)
+    plot_skew_mean_vs_median(df, cols)
     plot_correlation(df, cols)
 
     print("\nDone. All figures saved to outputs/processing/figures/")

@@ -360,13 +360,14 @@ def plot_isoforest_scores(
 
         for tstamp, row in hits.iterrows():
             agree = (tstamp, row["top_series"]) in zset
+            color = "#c0392b" if agree else "#27ae60"
             ax.scatter(tstamp, row["anomaly_score"], s=80,
-                       facecolors="#c0392b" if agree else "none",
-                       edgecolors="#c0392b", linewidths=1.8, zorder=5)
+                       facecolors=color if agree else "none",
+                       edgecolors=color, linewidths=1.8, zorder=10)
             ax.annotate(row["top_series"].replace("List", "L").replace("_field", "f"),
                         (tstamp, row["anomaly_score"]), fontsize=6,
                         xytext=(0, 6), textcoords="offset points",
-                        ha="center", color="#c0392b", rotation=45)
+                        ha="center", color=color, rotation=45)
 
         ax.set_ylabel("Anomaly score (higher = more anomalous)", fontsize=9)
         ax.set_xlabel("Date (UTC)", fontsize=9)
@@ -382,9 +383,9 @@ def plot_isoforest_scores(
         legend = [
             Line2D([0], [0], marker="o", color="w", markerfacecolor="#c0392b",
                    markeredgecolor="#c0392b", markersize=9, linestyle="none",
-                   label="Drop flag — z-score agrees"),
+                   label="Drop flag — Isolation Forest & z-score"),
             Line2D([0], [0], marker="o", color="w", markerfacecolor="none",
-                   markeredgecolor="#c0392b", markeredgewidth=1.8, markersize=9,
+                   markeredgecolor="#27ae60", markeredgewidth=1.8, markersize=9,
                    linestyle="none", label="Drop flag — Isolation Forest only"),
         ]
         ax.legend(handles=[*ax.get_legend_handles_labels()[0], *legend], fontsize=8,
@@ -505,10 +506,29 @@ def plot_validation_recovery(
         )
 
         # ── LEFT: recovery curve ──────────────────────────────────────────────
+        # nudge overlapping end-labels apart so names stay readable
+        end_pts = sorted(
+            ((float(rates.loc[s, f"{x[-1]}%"]) * 100, s) for s in rates.index),
+            key=lambda t: t[0],
+        )
+        last_y = -1e9
+        label_y = {}
+        for y_end, s in end_pts:
+            y_lab = max(y_end, last_y + 4.0)  # min 4-pt vertical gap
+            label_y[s] = y_lab
+            last_y = y_lab
+
         for series in rates.index:
             y_s = [rates.loc[series, f"{p}%"] * 100 for p in x]
+            c = _list_color(series)
             ax_rec.plot(x, y_s, linewidth=1.0, alpha=0.45,
-                        color=_list_color(series), linestyle="-")
+                        color=c, linestyle="-")
+            short = series.replace("List", "L").replace("_field", "f")
+            ax_rec.annotate(
+                short, xy=(x[-1], y_s[-1]), xytext=(x[-1] + 1.5, label_y[series]),
+                fontsize=6.5, color=c, va="center", ha="left",
+                annotation_clip=False,
+            )
 
         # bold overall mean
         y_mean = [float(overall.get(f"{p}%", np.nan)) * 100 for p in x]
@@ -544,7 +564,7 @@ def plot_validation_recovery(
             color="#7f8c8d", va="bottom",
         )
 
-        ax_rec.set_xlim(5, 95)
+        ax_rec.set_xlim(5, 103)
         ax_rec.set_ylim(-2, 105)
         ax_rec.set_xlabel("Injected drop magnitude (% reduction from baseline)", fontsize=9)
         ax_rec.set_ylabel("Detection rate (% of active cells flagged)", fontsize=9)
@@ -604,6 +624,83 @@ def plot_validation_recovery(
 
         fig.tight_layout()
         _save(fig, "13_validation", "validation")
+
+
+def plot_threshold_tradeoff(tradeoff: "pd.DataFrame", knee: float = -2.5) -> None:
+    """Defend the -2.5 threshold as a knee-point between two proxy metrics.
+
+    Bars (left axis)  = false-alarm flags on presumed-clean hours (specificity).
+    Lines (right axis) = injected-drop recovery at 50% and 90% (sensitivity).
+
+    The knee threshold is highlighted: moving looser (-2.0) buys sensitivity at a
+    steep false-alarm cost; moving tighter (-3.0) buys little on false alarms but
+    collapses recovery. -2.5 is the favourable trade.
+    """
+    thresholds = list(tradeoff.index)
+    x = np.arange(len(thresholds))
+    rec_cols = [c for c in tradeoff.columns if c.startswith("recovery_at_")]
+    rec_cols = sorted(rec_cols, key=lambda c: int(c.split("_")[-1]))
+
+    with plt.rc_context(STYLE):
+        fig, ax_fp = plt.subplots(figsize=(10, 6))
+
+        # highlight the knee column
+        if knee in thresholds:
+            ax_fp.axvspan(thresholds.index(knee) - 0.5, thresholds.index(knee) + 0.5,
+                          color="#f6f0d8", alpha=0.7, zorder=0)
+
+        # ── bars: false-alarm flags ──────────────────────────────────────────
+        bars = ax_fp.bar(x, tradeoff["n_fp_flags"].values, width=0.5,
+                         color="#c0392b", alpha=0.85, edgecolor="white",
+                         label="False-alarm flags (clean hours)", zorder=3)
+        for xi, (n, rate) in enumerate(zip(tradeoff["n_fp_flags"], tradeoff["fp_rate"])):
+            ax_fp.text(xi, n + 0.5, f"{int(n)}\n({rate:.2%})", ha="center", va="bottom",
+                       fontsize=8, color="#7b241c", zorder=4)
+
+        ax_fp.set_ylabel("False-alarm flags on presumed-clean hours",
+                         fontsize=10, color="#c0392b")
+        ax_fp.tick_params(axis="y", labelcolor="#c0392b")
+        ax_fp.set_ylim(0, max(tradeoff["n_fp_flags"].max() * 1.35, 5))
+
+        # ── lines: recovery at each magnitude ────────────────────────────────
+        ax_rec = ax_fp.twinx()
+        greens = ["#27ae60", "#145a32"]
+        for i, col in enumerate(rec_cols):
+            pct = int(col.split("_")[-1])
+            y = tradeoff[col].values * 100
+            ax_rec.plot(x, y, marker="o", markersize=8, linewidth=2.2,
+                        color=greens[i % len(greens)],
+                        label=f"Recovery at {pct}% injected drop", zorder=5)
+            for xi, yi in zip(x, y):
+                ax_rec.annotate(f"{yi:.0f}%", (xi, yi), xytext=(9, 0),
+                                textcoords="offset points", ha="left", va="center",
+                                fontsize=8, fontweight="bold",
+                                color=greens[i % len(greens)], zorder=6)
+
+        ax_rec.set_ylabel("Injected-drop recovery (sensitivity)",
+                          fontsize=10, color="#145a32")
+        ax_rec.tick_params(axis="y", labelcolor="#145a32")
+        ax_rec.set_ylim(0, 105)
+        ax_rec.yaxis.set_major_formatter(mticker.PercentFormatter())
+
+        ax_fp.set_xticks(x)
+        ax_fp.set_xticklabels(
+            [f"z = {t}{'  (chosen)' if t == knee else ''}" for t in thresholds],
+            fontsize=10,
+        )
+        ax_fp.set_xlabel("Drop threshold", fontsize=10)
+        ax_fp.set_title(
+            "Threshold Trade-off — Why z = -2.5 Is the Knee\n"
+            "Looser = more false alarms  |  Tighter = lost sensitivity",
+            fontsize=12, fontweight="bold",
+        )
+
+        h1, l1 = ax_fp.get_legend_handles_labels()
+        h2, l2 = ax_rec.get_legend_handles_labels()
+        ax_fp.legend(h1 + h2, l1 + l2, fontsize=8, loc="upper center")
+
+        fig.tight_layout()
+        _save(fig, "08_threshold_tradeoff", "detection")
 
 
 # ── List → field mapping (5 lists × 3 fields) ──────────────────────────────────
