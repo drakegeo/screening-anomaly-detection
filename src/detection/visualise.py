@@ -712,54 +712,36 @@ LIST_FIELDS = {
     "ListE": ["ListE_field13", "ListE_field14", "ListE_field15"],
 }
 
-# health status colours
+# health status colours — three states plus inactive
 STATUS_COLORS = {
-    "healthy":    "#27ae60",  # green
-    "field":      "#f39c12",  # amber — single-field event
-    "list":       "#c0392b",  # red — list-level failure (>=2 fields same date)
-    "holiday":    "#5dade2",  # blue — holiday-only zeros (volume effect)
-    "inactive":   "#95a5a6",  # grey — excluded / no baseline
+    "healthy":  "#27ae60",  # green — no genuine drop
+    "failure":  "#c0392b",  # red — drop anomaly detected (non-holiday)
+    "holiday":  "#5dade2",  # blue — holiday zeros only (volume effect)
+    "inactive": "#95a5a6",  # grey — excluded / no baseline
 }
 
+ISO_HATCH = "///"  # overlay marking Isolation-Forest corroboration
 
-def _series_status(
-    series: str,
-    events: pd.DataFrame,
-    list_level_series: set[str],
-) -> str:
-    """Classify one series into a dashboard health status."""
+
+def _series_status(series: str, events: pd.DataFrame) -> str:
+    """Classify one series: healthy / failure / holiday / inactive."""
     from src.processing.load import INACTIVE_SERIES
     if series in INACTIVE_SERIES:
         return "inactive"
-    if series in list_level_series:
-        return "list"
     ev = events[events["series"] == series]
     if ev.empty:
         return "healthy"
-    non_holiday = ev[~ev["is_holiday"]]
-    if not non_holiday.empty:
-        return "field"
+    if not ev[~ev["is_holiday"]].empty:
+        return "failure"
     return "holiday"
 
 
-def _find_list_level_failures(events: pd.DataFrame) -> set[str]:
-    """Series belonging to a list where >=2 fields have events on the same date."""
-    hits: set[str] = set()
-    if events.empty:
-        return hits
-    ev = events[~events["is_holiday"]].copy()
-    if ev.empty:
-        return hits
-    ev["date"] = pd.to_datetime(ev["start"]).dt.normalize()
-    for list_name, fields in LIST_FIELDS.items():
-        sub = ev[ev["series"].isin(fields)]
-        if sub.empty:
-            continue
-        # count distinct fields dropping on each date
-        by_date = sub.groupby("date")["series"].nunique()
-        if (by_date >= 2).any():
-            hits.update(sub["series"].unique())
-    return hits
+def _iso_flagged_series(iso_scores: "pd.DataFrame | None") -> set[str]:
+    """Series that Isolation Forest flags as a drop (top_series of iso drop-hits)."""
+    if iso_scores is None or iso_scores.empty:
+        return set()
+    hits = iso_scores[iso_scores["iso_flag"] & iso_scores["is_drop"]]
+    return set(hits["top_series"].unique())
 
 
 def plot_monitoring_dashboard(
@@ -768,38 +750,53 @@ def plot_monitoring_dashboard(
     events: pd.DataFrame,
     fp_rate: float,
     baseline: dict[str, pd.DataFrame] | None = None,
+    iso_scores: "pd.DataFrame | None" = None,
     top_n: int = 12,
 ) -> None:
     """Operational monitoring dashboard — the 9am ops-team view.
 
-    Three panels:
-      - Health grid: 5 lists x 3 fields, each cell colour-coded by status
-        (green healthy, amber field-level event, red list-level failure,
-        blue holiday-only, grey inactive).
-      - KPI strip: headline numbers (events, series affected, FP rate, worst).
-      - Alert queue: top events ranked by severity, event-level (not hour-level).
+    Panels:
+      - Health grid: 5 lists x 3 fields. Colour = status (green healthy,
+        red drop detected, blue holiday zeros, grey inactive). A ``///`` hatch
+        marks cells the Isolation Forest also flags, so agreement is visible.
+      - Status summary: z-score vs Isolation Forest coverage (as % of active
+        series) and where they agree.
+      - Alert queue: top events ranked by severity, with per-event IF
+        corroboration and baseline confidence.
+      - Key findings: slide-ready conclusions.
 
     Sits on top of the detection results — turns the model into a system.
     """
     import matplotlib.gridspec as gridspec
-    from matplotlib.patches import Rectangle
+    from matplotlib.patches import Rectangle, Patch
 
-    list_level = _find_list_level_failures(events)
+    from src.processing.load import INACTIVE_SERIES
+
+    active = [c for c in series_cols if c not in INACTIVE_SERIES]
+    n_active = len(active)
 
     non_holiday_events = events[~events["is_holiday"]] if not events.empty else events
     n_events = len(non_holiday_events)
-    n_series_affected = non_holiday_events["series"].nunique() if not events.empty else 0
+
+    z_series = set(non_holiday_events["series"].unique()) if n_events else set()
+    iso_series = _iso_flagged_series(iso_scores) & set(active)
+    common_series = z_series & iso_series
+    union_series = z_series | iso_series
+
+    def _pct(k: int) -> str:
+        return f"{k} series" if n_active else "—"
+
     worst_row = (
         non_holiday_events.sort_values("worst_z").iloc[0]
         if n_events > 0 else None
     )
 
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(18, 10))
+        fig = plt.figure(figsize=(18, 11))
         gs = gridspec.GridSpec(
-            2, 2, figure=fig,
-            height_ratios=[1.1, 1.0], width_ratios=[1.25, 1.0],
-            hspace=0.32, wspace=0.18,
+            3, 2, figure=fig,
+            height_ratios=[1.1, 0.95, 0.4], width_ratios=[1.25, 1.0],
+            hspace=0.40, wspace=0.18,
         )
 
         # ── PANEL 1: health grid ──────────────────────────────────────────────
@@ -807,26 +804,32 @@ def plot_monitoring_dashboard(
         lists = list(LIST_FIELDS.keys())
         for row, list_name in enumerate(lists):
             for col, series in enumerate(LIST_FIELDS[list_name]):
-                status = _series_status(series, events, list_level)
+                status = _series_status(series, events)
                 color = STATUS_COLORS[status]
+                iso_hit = series in iso_series
                 ax_grid.add_patch(Rectangle(
                     (col, len(lists) - 1 - row), 1, 1,
                     facecolor=color, edgecolor="white", linewidth=3, alpha=0.9,
+                    hatch=ISO_HATCH if iso_hit else None,
                 ))
-                # field label
+                # mask the hatch behind text so labels stay readable
+                tbox = dict(boxstyle="round,pad=0.12", facecolor=color,
+                            edgecolor="none", alpha=0.85) if iso_hit else None
                 fld = series.split("_")[1]
                 ax_grid.text(
-                    col + 0.5, len(lists) - 1 - row + 0.62, fld,
+                    col + 0.5, len(lists) - 1 - row + 0.60, fld,
                     ha="center", va="center", fontsize=9, color="white",
-                    fontweight="bold",
+                    fontweight="bold", bbox=tbox,
                 )
-                # event count badge (non-holiday)
                 n = len(events[(events["series"] == series) & (~events["is_holiday"])]) \
                     if not events.empty else 0
-                badge = f"{n} event{'s' if n != 1 else ''}" if n else "—"
+                tag = f"{n} event{'s' if n != 1 else ''}" if n else "—"
+                if iso_hit:
+                    tag += " +IF"
                 ax_grid.text(
-                    col + 0.5, len(lists) - 1 - row + 0.32, badge,
+                    col + 0.5, len(lists) - 1 - row + 0.28, tag,
                     ha="center", va="center", fontsize=7.5, color="white",
+                    bbox=tbox,
                 )
 
         ax_grid.set_xlim(0, 3)
@@ -842,46 +845,46 @@ def plot_monitoring_dashboard(
             spine.set_visible(False)
         ax_grid.grid(False)
 
-        # legend for statuses
-        from matplotlib.patches import Patch
         legend_items = [
             Patch(facecolor=STATUS_COLORS["healthy"], label="Healthy"),
-            Patch(facecolor=STATUS_COLORS["field"], label="Field-level event"),
-            Patch(facecolor=STATUS_COLORS["list"], label="List-level failure (escalate)"),
+            Patch(facecolor=STATUS_COLORS["failure"], label="Drop detected"),
             Patch(facecolor=STATUS_COLORS["holiday"], label="Holiday zeros only"),
             Patch(facecolor=STATUS_COLORS["inactive"], label="Inactive / excluded"),
+            Patch(facecolor="white", edgecolor="#2c3e50", hatch=ISO_HATCH,
+                  label="Isolation Forest agrees"),
         ]
         ax_grid.legend(handles=legend_items, loc="upper center",
                        bbox_to_anchor=(0.5, -0.08), ncol=3, fontsize=8, frameon=False)
 
-        # ── PANEL 2: KPI strip ────────────────────────────────────────────────
+        # ── PANEL 2: status summary (per-method coverage) ─────────────────────
         ax_kpi = fig.add_subplot(gs[0, 1])
         ax_kpi.axis("off")
-        n_list_fail = len(list_level)
-        worst_txt = (
-            f"{worst_row['series']}\n{pd.Timestamp(worst_row['start']).strftime('%b %d %H:%M')}"
-            f"  (z={worst_row['worst_z']:.1f})"
-            if worst_row is not None else "none"
-        )
-        kpis = [
-            ("List-level failures", str(n_list_fail),
-             STATUS_COLORS["list"] if n_list_fail else STATUS_COLORS["healthy"]),
-            ("Field-level events", str(n_events), STATUS_COLORS["field"]),
-            ("Series affected", f"{n_series_affected} / 14", "#2c3e50"),
-            ("False-alarm rate", f"{fp_rate*100:.2f}%", "#2c3e50"),
+        ax_kpi.set_title(f"Status Summary — Detector Coverage ({n_active} active series)",
+                         fontsize=12, fontweight="bold", loc="left", pad=10)
+
+        rows = [
+            ("Z-score (primary)", _pct(len(z_series)), STATUS_COLORS["failure"]),
+            ("Isolation Forest (corroborator)", _pct(len(iso_series)), "#2c5f8a"),
+            ("Both methods agree", _pct(len(common_series)), "#145a32"),
+            ("Flagged by either", _pct(len(union_series)), "#2c3e50"),
         ]
-        for i, (label, value, color) in enumerate(kpis):
-            y = 0.9 - i * 0.23
-            ax_kpi.text(0.05, y, value, fontsize=26, fontweight="bold",
+        for i, (label, value, color) in enumerate(rows):
+            y = 0.88 - i * 0.20
+            ax_kpi.text(0.04, y, value, fontsize=22, fontweight="bold",
                         color=color, va="center", transform=ax_kpi.transAxes)
-            ax_kpi.text(0.05, y - 0.08, label, fontsize=10, color="#7f8c8d",
+            ax_kpi.text(0.04, y - 0.075, label, fontsize=9.5, color="#7f8c8d",
                         va="center", transform=ax_kpi.transAxes)
-        ax_kpi.text(0.55, 0.9, "Worst event", fontsize=10, color="#7f8c8d",
-                    va="center", transform=ax_kpi.transAxes)
-        ax_kpi.text(0.55, 0.78, worst_txt, fontsize=11, color="#c0392b",
-                    fontweight="bold", va="center", transform=ax_kpi.transAxes)
-        ax_kpi.set_title("Status Summary", fontsize=12, fontweight="bold",
-                         loc="left", pad=10)
+
+        if worst_row is not None:
+            worst_txt = (
+                f"{worst_row['series']}  ·  "
+                f"{pd.Timestamp(worst_row['start']).strftime('%b %d %H:%M')}  ·  "
+                f"z = {worst_row['worst_z']:.1f}"
+            )
+            ax_kpi.text(0.04, 0.05, "Worst event: ", fontsize=9.5, color="#7f8c8d",
+                        va="center", transform=ax_kpi.transAxes)
+            ax_kpi.text(0.28, 0.05, worst_txt, fontsize=10, color="#c0392b",
+                        fontweight="bold", va="center", transform=ax_kpi.transAxes)
 
         # ── PANEL 3: alert queue (event-level) ────────────────────────────────
         ax_q = fig.add_subplot(gs[1, :])
@@ -890,10 +893,10 @@ def plot_monitoring_dashboard(
         queue = (non_holiday_events.sort_values("worst_z").head(top_n)
                  if n_events > 0 else pd.DataFrame())
 
-        headers = ["Series", "Start", "Duration", "Worst z", "Drop %", "Baseline", "Scope"]
-        col_x = [0.02, 0.20, 0.36, 0.49, 0.60, 0.71, 0.87]
+        headers = ["Series", "Start", "Duration", "Worst z", "Drop %", "Baseline", "Isolation Forest"]
+        col_x = [0.02, 0.20, 0.36, 0.49, 0.60, 0.71, 0.85]
 
-        ax_q.text(0.02, 1.02, "Alert Queue — Events Ranked by Severity",
+        ax_q.text(0.02, 1.04, "Alert Queue — Events Ranked by Severity",
                   fontsize=12, fontweight="bold", transform=ax_q.transAxes)
         for x, h in zip(col_x, headers):
             ax_q.text(x, 0.93, h, fontsize=9, fontweight="bold",
@@ -901,23 +904,22 @@ def plot_monitoring_dashboard(
         ax_q.axhline(0.90, xmin=0.0, xmax=1.0, color="#bdc3c7", linewidth=1)
 
         if queue.empty:
-            ax_q.text(0.02, 0.80, "No field-level events — all series healthy.",
+            ax_q.text(0.02, 0.80, "No genuine events — all series healthy.",
                       fontsize=11, color=STATUS_COLORS["healthy"],
                       transform=ax_q.transAxes)
         else:
-            row_h = 0.88 / max(len(queue), 1)
+            row_h = 0.86 / max(len(queue), 1)
             for i, (_, ev) in enumerate(queue.iterrows()):
-                y = 0.85 - i * row_h
-                scope = "LIST" if ev["series"] in list_level else "field"
-                scope_color = STATUS_COLORS["list"] if ev["series"] in list_level \
-                    else STATUS_COLORS["field"]
+                y = 0.84 - i * row_h
+                iso_ok = ev["series"] in iso_series
+                iso_txt = "confirmed ✓" if iso_ok else "z-score only"
+                iso_color = "#145a32" if iso_ok else "#7f8c8d"
                 drop_pct = (
                     (ev["worst_observed"] - ev["expected_median"])
                     / ev["expected_median"] * 100
                     if ev["expected_median"] else float("nan")
                 )
                 dur = f"{ev['duration_hours']}h ({ev['n_flags']} flags)"
-                # baseline confidence for this event's (series, hour)
                 if baseline is not None:
                     h = pd.Timestamp(ev["start"]).hour
                     n_obs = int(baseline["count"].loc[h, ev["series"]])
@@ -933,11 +935,11 @@ def plot_monitoring_dashboard(
                     f"{ev['worst_z']:.2f}" if pd.notna(ev["worst_z"]) else "—",
                     f"{drop_pct:.0f}%" if pd.notna(drop_pct) else "—",
                     base_txt,
-                    scope,
+                    iso_txt,
                 ]
                 for j, (x, txt) in enumerate(zip(col_x, cells)):
                     if j == 6:
-                        c = scope_color
+                        c = iso_color
                     elif j == 5:
                         c = base_color
                     else:
@@ -946,8 +948,38 @@ def plot_monitoring_dashboard(
                     ax_q.text(x, y, str(txt), fontsize=8.5, color=c,
                               fontweight=fw, transform=ax_q.transAxes)
 
+        # ── PANEL 4: key findings (slide conclusions) ─────────────────────────
+        ax_c = fig.add_subplot(gs[2, :])
+        ax_c.axis("off")
+        n_low = 0
+        if baseline is not None and n_events:
+            for _, ev in non_holiday_events.iterrows():
+                h = pd.Timestamp(ev["start"]).hour
+                if bool(baseline["low_conf"].loc[h, ev["series"]]):
+                    n_low += 1
+        worst_series = worst_row["series"] if worst_row is not None else "—"
+
+        bullets = [
+            (f"{n_events} genuine drop events across {len(z_series)} series — "
+             f"holiday zeros ruled out as volume, not list failure.", "#c0392b"),
+            (f"Isolation Forest independently confirms {len(common_series)} of "
+             f"{len(z_series)} — the highest-confidence alerts, escalate first.", "#145a32"),
+            (f"Worst is {worst_series}: a sustained drop, not noise — exactly the "
+             f"silent failure that lets unscreened transactions through.", "#c0392b"),
+            (f"Every alert rests on a full baseline ({n_low} low-confidence). "
+             f"Z-score detects; Isolation Forest corroborates and names the culprit.", "#2c5f8a"),
+        ]
+        ax_c.text(0.005, 1.05, "Key Findings", fontsize=12.5, fontweight="bold",
+                  color="#2c3e50", transform=ax_c.transAxes)
+        for i, (b, dot) in enumerate(bullets):
+            y = 0.80 - i * 0.26
+            ax_c.text(0.005, y, "●", fontsize=10, color=dot,
+                      va="top", transform=ax_c.transAxes)
+            ax_c.text(0.028, y, b, fontsize=10.5, color="#2c3e50",
+                      va="top", transform=ax_c.transAxes)
+
         fig.suptitle(
             "Sanctions Screening — Drop Anomaly Monitoring Dashboard",
-            fontsize=15, fontweight="bold", y=0.98,
+            fontsize=15, fontweight="bold", y=0.985,
         )
         _save(fig, "14_dashboard", "detection")

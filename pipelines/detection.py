@@ -118,7 +118,8 @@ def main() -> None:
 
     n_active = len([c for c in cols if c not in ["ListB_field5"]])
     fp, _, _ = false_positive_rate(anomalies, n_series=n_active, n_hours=len(df))
-    plot_monitoring_dashboard(df, cols, events, fp, baseline=baseline)
+    plot_monitoring_dashboard(df, cols, events, fp, baseline=baseline,
+                              iso_scores=iso_out["scores"])
 
     print(f"\nDone. {len(anomalies['series'].unique())} series flagged. "
           f"Figures in outputs/detection/figures/, tables in outputs/detection/tables/")
